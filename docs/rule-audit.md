@@ -176,8 +176,6 @@ The spread confirms what AgDR-0001 set out to make true: the **high-blast-radius
 
 [^lint]: Static-analysis concern. Belongs in each project's ESLint / `tsconfig` / equivalent — not a shell hook. The rule stays in `code-standards.md` as the canonical prose; individual projects translate it into their linter config.
 
-[^project-cmds]: Historical footnote preserved for context. Pre-#111 `pre-push-gate.sh` was an advisory reminder; #111 upgraded it to a blocking runner that reads commands from `.claude/project-config.*.json` → `.pre_push.commands`. See the `[^pre-push-111]` footnote.
-
 [^pre-push-111]: Per-fork command list lives at `.claude/project-config.json → .pre_push.commands[]` (each entry has `name` + `run` shell string). Default is an empty list (hook is a no-op) — projects opt in by defining their checks. Fail-fast: the first non-zero exit blocks the push and reports the last 20 lines of output. Emergency escape hatch: include `<!-- pre-push: skip -->` in the HEAD commit message to bypass one push with a visible WARN. The skip marker is grep-able on purpose so bypasses are auditable.
 
 [^self-discipline]: Chat-output rule. Hooks run on tool calls, not assistant prose. The rule file is the primary defence and the downstream artefacts (commit messages, PR titles, staged diffs) are the backstop. See `ticket-vocabulary.md § Why not lint Claude's prose output?` for the full rejection of the "lint chat output" alternative.
