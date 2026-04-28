@@ -1,0 +1,23 @@
+version: 1
+
+projects:
+  - name: profile-photo-processor
+    repo: yehiagamalx/profile-photo-processor
+    workspace: workspace/profile-photo-processor
+    docs: projects/profile-photo-processor
+    status: active
+    tier: P0
+    roles:
+      - tech-lead
+      - backend-engineer
+    tags:
+      - wordpress
+      - plugin
+    ticket_prefix: GH
+
+defaults:
+  status: active
+  tier: P1
+  ticket_prefix: GH
+  roles:
+    - tech-lead
