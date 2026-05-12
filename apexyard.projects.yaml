@@ -15,6 +15,21 @@ projects:
       - plugin
     ticket_prefix: GH
 
+  - name: pandoc-api
+    repo: yehiagamalx/pandoc-api
+    workspace: workspace/pandoc-api
+    docs: projects/pandoc-api
+    status: active
+    tier: P1
+    roles:
+      - tech-lead
+      - backend-engineer
+    tags:
+      - api
+      - docker
+      - python
+    ticket_prefix: GH
+
 defaults:
   status: active
   tier: P1
