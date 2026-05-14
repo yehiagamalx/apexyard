@@ -17,6 +17,20 @@ projects:
       - python
     ticket_prefix: GH
 
+  - name: ari-publication-importer
+    repo: yehiagamalx/ari-publication-importer
+    workspace: workspace/ari-publication-importer
+    docs: projects/ari-publication-importer
+    status: active
+    tier: P1
+    roles:
+      - tech-lead
+      - backend-engineer
+    tags:
+      - wordpress
+      - plugin
+    ticket_prefix: GH
+
   - name: profile-photo-processor
     repo: yehiagamalx/profile-photo-processor
     workspace: workspace/profile-photo-processor
