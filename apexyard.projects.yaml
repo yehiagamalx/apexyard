@@ -1,6 +1,36 @@
 version: 1
 
 projects:
+  - name: ari-analytics
+    repo: yehiagamalx/ari-analytics
+    workspace: workspace/ari-analytics
+    docs: projects/ari-analytics
+    status: handover
+    tier: P1
+    roles:
+      - tech-lead
+      - backend-engineer
+      - frontend-engineer
+    tags:
+      - analytics
+      - react
+      - python
+    ticket_prefix: GH
+
+  - name: ari-publication-importer
+    repo: yehiagamalx/ari-publication-importer
+    workspace: workspace/ari-publication-importer
+    docs: projects/ari-publication-importer
+    status: active
+    tier: P1
+    roles:
+      - tech-lead
+      - backend-engineer
+    tags:
+      - wordpress
+      - plugin
+    ticket_prefix: GH
+
   - name: profile-photo-processor
     repo: yehiagamalx/profile-photo-processor
     workspace: workspace/profile-photo-processor
