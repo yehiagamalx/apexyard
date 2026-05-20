@@ -10,13 +10,16 @@ ApexYard governs a **portfolio of repos as one organisation**. You fork apexyard
 
 ApexYard ships two supported patterns. **Read this section before you fork** — picking the wrong one and pushing private project names to a public fork is hard to recover from cleanly (the GitHub PR / Issue edit history survives a force-push).
 
-| | Single-fork mode (default) | Split-portfolio mode |
+| | Single-fork mode (default) | Split-portfolio mode (v2) |
 | --- | --- | --- |
 | **Repos** | One: your fork of `me2resh/apexyard` | Two: public fork **+** a separate private repo for the portfolio |
-| **Where the registry lives** | `apexyard.projects.yaml` in the fork | `apexyard.projects.yaml` in the private repo, symlinked into the fork |
-| **Where `projects/<name>/` lives** | Inside the fork | Inside the private repo, symlinked into the fork |
-| **Public exposure** | Every registered project name + handover finding is on a public GitHub repo | Public fork holds only framework files; private repo holds your portfolio data |
-| **Daily workflow** | Same | Same — skills resolve through the symlinks transparently |
+| **Where the registry lives** | `apexyard.projects.yaml` in the fork | `apexyard.projects.yaml` in the private repo, resolved via config block |
+| **Where `projects/<name>/` lives** | Inside the fork | Inside the private repo, resolved via config block |
+| **Where `onboarding.yaml` lives** | Inside the fork | Inside the private repo (v2, framework ≥ #242) |
+| **Where `workspace/<name>/` lives** | Inside the fork (gitignored) | Inside the private repo (v2, framework ≥ #242) |
+| **Ops-fork anchor on disk** | `onboarding.yaml + apexyard.projects.yaml` (legacy) — or `.apexyard-fork` marker file (v2) | `.apexyard-fork` marker file (v2) — neither legacy file is in the public fork |
+| **Public exposure** | Every registered project name + handover finding is on a public GitHub repo | Public fork holds only framework files + your customisations; private repo holds your portfolio data, company config, AND your managed-project clones |
+| **Daily workflow** | Same | Same — skills resolve through the config block transparently |
 | **Pick this if…** | All your projects are already public, OR you're on GitHub Pro / Team / Enterprise (which support private forks of public repos) | You're on GitHub Free with any project you don't want named publicly |
 
 **The trip-wire**: GitHub Free disallows changing a fork's visibility — you cannot make a fork of a public repo private after the fact. Combined with the framework's default of committing the registry to the fork, free-tier adopters with any private project risk accidentally publishing their portfolio names with a stray push (the framework itself never pushes without operator approval, but once the registry is committed locally the next push exposes it). The split-portfolio mode below is the supported way around this.
@@ -127,7 +130,9 @@ projects/example-app/
 └── roadmap.md     ← project-specific roadmap (optional)
 ```
 
-Or run `/handover example-app` and the skill will generate a real assessment and seed the README. Then optionally clone the live working copy:
+Or run `/handover example-app` and the skill will generate a real assessment and seed the README. At the end of its flow, `/handover` also **offers (default-no) to clone the project into `workspace/<name>/`** — accept if you intend to follow up with `/code-review`, `/threat-model`, or `/security-review` and want the LSP-aware deep-dive path; decline if you'd rather configure `ENABLE_LSP_TOOL=1` + the per-language plugin first, or skip the deep dive entirely. The prompt surfaces the disk cost, the gitignored status (`workspace/*/`), and the LSP plugin caveats explicitly so the cost is owned, not assumed.
+
+If you'd rather clone manually:
 
 ```bash
 git clone github.com/your-org/example-app workspace/example-app
@@ -167,12 +172,16 @@ Use this mode if you're on GitHub Free with any project you don't want named pub
 
 The default sibling-dir name is **`<fork>-portfolio`**, so the relationship between the two repos is self-documenting on disk and on GitHub. If you kept the fork name as `apexyard`, the sibling defaults to `apexyard-portfolio`. If you renamed the fork (e.g. `cos` for Chief-of-Staff), the sibling defaults to `cos-portfolio`. Pick something else if you'd prefer — the framework only cares about the local path you point the config block at.
 
-Both repos live in your account; on disk they sit side-by-side. Inside the apexyard fork, the framework's portfolio-aware skills resolve `apexyard.projects.yaml` and `projects/` through one of two mechanisms:
+Both repos live in your account; on disk they sit side-by-side. Inside the apexyard fork, the framework's portfolio-aware skills resolve `apexyard.projects.yaml`, `projects/`, **`onboarding.yaml`** (v2), and **`workspace/`** (v2) through one of two mechanisms:
 
-- **Config block (recommended, framework ≥ #145).** A `portfolio:` block in `.claude/project-config.json` points the skills at `../apexyard-portfolio/apexyard.projects.yaml` and `../apexyard-portfolio/projects`. The `_lib-portfolio-paths.sh` helper resolves both. A `SessionStart` banner surfaces broken config (missing files, bad paths) at session start so you don't discover a misconfiguration mid-skill.
-- **Symlink (legacy, framework < #145).** `apexyard.projects.yaml` and `projects/` are symlinks into the portfolio repo (and gitignored from the fork itself). Existing skills resolve through the symlink transparently. Continues to work; if you're upgrading framework versions, prefer the config block.
+- **Config block (recommended, framework ≥ #145; v2 keys added in #242).** A `portfolio:` block in `.claude/project-config.json` points the skills at `../apexyard-portfolio/apexyard.projects.yaml`, `../apexyard-portfolio/projects`, `../apexyard-portfolio/onboarding.yaml`, and `../apexyard-portfolio/workspace`. The `_lib-portfolio-paths.sh` helper resolves all five (`registry`, `projects_dir`, `ideas_backlog`, `onboarding`, `workspace_dir`). A `SessionStart` banner surfaces broken config (missing files, bad paths) at session start so you don't discover a misconfiguration mid-skill.
+- **Symlink (legacy, framework < #145).** `apexyard.projects.yaml` and `projects/` are symlinks into the portfolio repo (and gitignored from the fork itself). Existing skills resolve through the symlink transparently. Continues to work; if you're upgrading framework versions, prefer the config block. The v2 additions (`onboarding`, `workspace_dir`) are config-block only — there is no legacy symlink path for them.
 
-The `/split-portfolio` skill (introduced #146) automates the full migration flow including the config-block write — see § "Migrating from single-fork to split-portfolio" below for adopters who already pushed private project names to a public fork.
+**The v2 additions: why both `onboarding.yaml` and `workspace/` move to the private repo.** Earlier split-portfolio releases (v1, framework < #242) kept `onboarding.yaml` (your company name, mission, team list, tech stack) AND `workspace/<name>/` (the local clones of your managed projects) in the public fork. Both leak. The v1 layout meant a CTO running ApexYard on a private SaaS effectively published their team roster + tech-stack + every project name on a public GitHub repo via routine session activity. v2 closes that gap: every adopter-specific artefact lives in the private sibling repo; the public fork holds only framework files plus the operator's customisations to skills/hooks/rules.
+
+**The ops-fork anchor under v2.** Pre-v2 every hook + skill that walked up to find the ops fork looked for BOTH `onboarding.yaml` AND `apexyard.projects.yaml` at the candidate dir. Under v2, neither file is in the public fork — the walk-up condition fails. v2 introduces a presence-only marker file `.apexyard-fork` at the public-fork root; `_lib-ops-root.sh` and every walk-up consumer recognises both anchors (v2 marker first, legacy v1 pair as fallback for un-migrated adopters during the transition window).
+
+The `/split-portfolio` skill (introduced #146) automates the single-fork → split-portfolio migration. The `/update` skill (extended in #242) automates the v1 → v2 split-portfolio migration for adopters who're already split but on the older layout — see § "Migrating from split-portfolio v1 to v2" below.
 
 ### Setup — 7 steps, ~6 minutes
 
@@ -212,7 +221,7 @@ cd ~/ops/apexyard
 git remote add upstream https://github.com/me2resh/apexyard.git
 ```
 
-#### 5. Initialise the private portfolio
+#### 5. Initialise the private portfolio (v2 layout)
 
 ```bash
 cd ~/ops/apexyard-portfolio
@@ -225,10 +234,32 @@ defaults:
   ticket_prefix: GH
 EOF
 
-mkdir projects
+# v2: onboarding.yaml lives here too. Seed from the framework template
+# OR run /setup later inside the public fork — /setup writes to the
+# resolved onboarding path.
+cp ~/ops/apexyard/onboarding.yaml.example onboarding.yaml 2>/dev/null \
+  || cp ~/ops/apexyard/onboarding.yaml onboarding.yaml 2>/dev/null \
+  || cat > onboarding.yaml <<'YAML'
+company:
+  name: "Your Company Name"
+  mission: ""
+YAML
 
-git add apexyard.projects.yaml projects
-git commit -m "chore: initialise private portfolio"
+# v2: workspace/ lives here too. Empty dir to start; /handover and
+# manual `git clone workspace/<name>` will populate it.
+mkdir -p projects workspace
+
+# Ignore the inner managed-project clones inside workspace/ so they
+# don't get double-tracked in the private repo either.
+cat > .gitignore <<'IGNORE'
+workspace/*/
+IGNORE
+
+# Keep the dirs alive across the initial commit.
+touch projects/.gitkeep workspace/.gitkeep
+
+git add apexyard.projects.yaml onboarding.yaml projects workspace .gitignore
+git commit -m "chore: initialise private portfolio (split-portfolio v2)"
 git push
 ```
 
@@ -236,44 +267,56 @@ git push
 
 The recommended path is the **config block** (framework version ≥ #145). The symlink approach below is the legacy fallback for older framework versions — both work.
 
-##### Recommended: config-block mode
+##### Recommended: config-block mode (v2)
 
 ```bash
 cd ~/ops/apexyard
 
-# Tell the fork to ignore the registry + projects/ — they live in the portfolio.
+# Tell the fork to ignore everything that lives in the private repo:
+# registry, per-project docs, onboarding config, and the workspace dir.
 cat >> .gitignore <<'EOF'
 
-# Portfolio data lives in a separate private repo (split-portfolio mode).
+# Portfolio data lives in a separate private repo (split-portfolio v2).
 # See docs/multi-project.md.
 apexyard.projects.yaml
 projects
+onboarding.yaml
+workspace
 EOF
 
-# If projects/README.md is currently tracked from the upstream framework,
-# untrack it so the config-block resolution can take its place:
-git rm -r --cached projects 2>/dev/null || true
+# If any of these are currently tracked from the upstream framework,
+# untrack them so the config-block resolution can take their place:
+git rm -r --cached projects onboarding.yaml workspace 2>/dev/null || true
 
-# Write the portfolio: config block pointing at the sibling repo.
+# Write the v2 portfolio: config block pointing at the sibling repo.
 # Paths resolve relative to the ops-fork root (this directory).
 # If you used a different sibling-dir name than apexyard-portfolio,
-# substitute it in all three paths below.
+# substitute it in all five paths below.
 cat > .claude/project-config.json <<'JSON'
 {
   "portfolio": {
     "registry": "../apexyard-portfolio/apexyard.projects.yaml",
     "projects_dir": "../apexyard-portfolio/projects",
-    "ideas_backlog": "../apexyard-portfolio/projects/ideas-backlog.md"
+    "ideas_backlog": "../apexyard-portfolio/projects/ideas-backlog.md",
+    "onboarding": "../apexyard-portfolio/onboarding.yaml",
+    "workspace_dir": "../apexyard-portfolio/workspace"
   }
 }
 JSON
 
-git add .gitignore .claude/project-config.json
-git commit -m "chore: configure split-portfolio mode (config-block path resolution)"
+# Write the v2 ops-fork anchor. Presence-only marker; content is ignored
+# but a short identifying line helps human grep. Every framework hook
+# that walks up to find the ops fork looks for this marker first
+# (legacy onboarding.yaml + apexyard.projects.yaml pair stays as a
+# fallback for un-migrated forks).
+echo "# This file marks the directory as an ApexYard ops fork (split-portfolio v2)." > .apexyard-fork
+
+git add .gitignore .claude/project-config.json .apexyard-fork
+git commit -m "chore: configure split-portfolio v2 (config-block path resolution + marker)"
 git push
 ```
 
-The `SessionStart` hook chain calls `portfolio_validate` from `_lib-portfolio-paths.sh` on every session start. If the resolved registry / projects_dir / ideas_backlog paths are broken (typo, missing file, etc.), you'll see a one-line banner naming the failure. Silent on success.
+The `SessionStart` hook chain calls `portfolio_validate` from `_lib-portfolio-paths.sh` on every session start. If the resolved registry / projects_dir / ideas_backlog / onboarding / workspace_dir paths are broken (typo, missing file, etc.), you'll see a one-line banner naming the failure. Silent on success.
 
 ##### Legacy: symlink-based mode (framework < #145)
 
@@ -315,6 +358,43 @@ cd ~/ops/apexyard
 
 Adopt your first project with `/handover` — it writes to `../apexyard-portfolio/projects/<name>/` and appends to `../apexyard-portfolio/apexyard.projects.yaml`, both committed only to the private portfolio repo. The public fork stays slim.
 
+### Custom templates
+
+Every framework template (PRD, AgDR, migration AgDR, C4 context/container, vision, spike, etc.) can be overridden by an adopter-authored version. The mechanism is **path-mirroring** — drop your version at `<private_repo>/custom-templates/<path>` and it wins over the framework default at `templates/<path>`. No frontmatter, no config table, no registry.
+
+```
+~/ops/apexyard-portfolio/
+├── apexyard.projects.yaml
+├── projects/
+├── custom-templates/                    ← drop overrides here
+│   ├── prd.md                           ← overrides templates/prd.md
+│   ├── agdr.md                          ← overrides templates/agdr.md
+│   ├── agdr-migration.md                ← overrides templates/agdr-migration.md
+│   ├── spike.md                         ← overrides templates/spike.md
+│   └── architecture/
+│       ├── c4-context.md                ← overrides templates/architecture/c4-context.md
+│       └── c4-container.md              ← overrides templates/architecture/c4-container.md
+└── README.md
+```
+
+Why path-mirroring instead of frontmatter or a config table? Discovery is the convention itself — if you want to override `templates/<path>`, you put your version at `custom-templates/<path>`. Same shape as how `handbooks/<dim>/...` discovery works (#232). And resolution is **override, not additive**: an authored `custom-templates/prd.md` wins in full; the framework's `templates/prd.md` is ignored for that invocation. Templates are *forms*, not *content*, so partial-merge across two markdown files would be unreliable. Copy the framework default in full, then edit it.
+
+Single-fork adopters drop overrides at `<fork>/custom-templates/<path>` (sibling to `templates/`). Same resolution rule — adopters with no `custom-templates/` dir get the framework default automatically, zero behaviour change.
+
+The `_lib-portfolio-paths.sh` helper exposes `portfolio_resolve_template <relative_path>` (e.g. `portfolio_resolve_template architecture/c4-context.md`); every template-consuming skill (`/decide`, `/write-spec`, `/c4`, `/migration`, `/spike`, `/handover`) routes through it. Full reference: [`templates/README.md`](../templates/README.md). Design rationale: [`AgDR-0023`](agdr/AgDR-0023-custom-templates-override-semantics.md).
+
+To seed the directory in your private repo, copy the example README that ships with the framework:
+
+```bash
+cd ~/ops/apexyard-portfolio
+mkdir -p custom-templates
+cp ../apexyard/templates/custom-templates.README.example.md custom-templates/README.md
+git add custom-templates
+git commit -m "chore: scaffold custom-templates/ for adopter overrides"
+```
+
+The README is a starting point — the resolver doesn't read it; it's there for future-you and any human collaborator.
+
 ### Daily workflow under split mode
 
 ```bash
@@ -323,6 +403,14 @@ cd ~/ops/apexyard-portfolio     # registry + project docs changes go here, push 
 ```
 
 Most ApexYard skills (`/projects`, `/inbox`, `/status`, `/tasks`, `/stakeholder-update`, `/handover`) work from the apexyard dir — they resolve paths through the symlinks. Skills that touch framework files only (`/update`, `/release`) operate on the apexyard dir alone.
+
+#### Where session-state files live
+
+Framework session state — active-ticket markers, code-review approvals, CEO approvals, the bootstrap-skill marker — always lives at `<ops_fork_root>/.claude/session/`. **Not** inside any `workspace/<project>/` clone.
+
+This matters when you `cd workspace/<project>/` to do project-specific work: even though `git rev-parse --show-toplevel` from inside the clone returns the project clone (not the ops fork), the framework's hooks, agents, and skills (Rex, `/start-ticket`, `/approve-merge`, the merge-gate hooks) all walk up to find the ops fork (looking for both `onboarding.yaml` AND `apexyard.projects.yaml`) and write/read session state from there. The `_lib-ops-root.sh` helper (added in me2resh/apexyard#229 + #230) centralises this walk so all components agree on the canonical path.
+
+You'll never need to manage session-state files by hand. If you ever see a "BLOCKED: PR has no recorded code-reviewer approval" error after the agent visibly approved, check that BOTH `onboarding.yaml` AND `apexyard.projects.yaml` exist at the ops fork root — the walk needs both files present to identify the fork.
 
 ### Upstream sync under split mode
 
@@ -336,6 +424,167 @@ Most ApexYard skills (`/projects`, `/inbox`, `/status`, `/tasks`, `/stakeholder-
 - **One conflict path on `/update`** (the `projects/README.md` case above). Resolved manually if it ever fires.
 
 In exchange, **zero of your private project names ever land on a public GitHub repo**, ever.
+
+### Private custom skills + handbooks
+
+Split-portfolio mode also houses two layers of company-specific customisation that wouldn't be safe to publish on the public fork (introduced in framework #243):
+
+| Layer | Where in the private repo | What lives here |
+| --- | --- | --- |
+| **Custom skills** | `<private_repo>/custom-skills/<name>/SKILL.md` | Company-specific proprietary slash commands — `/file-internal-bug` against your internal tracker, `/check-policy` against a private compliance corpus, `/escalate-to-pagerduty`, etc. |
+| **Custom handbooks** | `<private_repo>/custom-handbooks/{architecture,general,language/<lang>}/*.md` | Company-confidential coding standards that name internal systems, refer to proprietary policy, or otherwise don't belong on a public repo. Same path-convention as the public `handbooks/` tree. |
+
+#### How discovery works
+
+- **Custom skills** — Claude Code discovers skills by walking `.claude/skills/<name>/SKILL.md` in the active fork. We don't control that glob path. The `link-custom-skills.sh` SessionStart hook fixes that gap: on every session start it iterates `<private_repo>/custom-skills/<name>/`, and for each subdirectory containing a `SKILL.md` it creates a gitignored symlink at `.claude/skills/<name>/` pointing into the private dir. Claude Code then sees the skill transparently. **Custom skills with the same name as a framework skill win** — the hook moves the framework version to `.claude/skills/<name>.framework.bak/` (gitignored) and prints a one-line warning at SessionStart so the override is visible. **Windows is not supported in v1**; the hook prints a one-line manual-install pointer and skips. Same shape as the LSP install on Windows.
+- **Custom handbooks** — Rex's agent prompt (`.claude/agents/code-reviewer.md` § 8) gains a second discovery path. The `portfolio_custom_handbooks_dir` resolver in `_lib-portfolio-paths.sh` returns the private dir; Rex globs both the public `handbooks/` tree AND the private one using the same architecture/general/language convention. No symlinks involved — handbooks aren't discovered by Claude Code, only by Rex's prompt, so a second glob is enough. Per-handbook precedence on overlapping topics: **Rex applies BOTH layers** and cites both when relevant; conflict resolution is the operator's responsibility (write it as prose in the custom handbook).
+
+#### Setup
+
+`/setup --split-portfolio` (or step 5 of the manual setup above) creates the two empty dirs in the private repo with a one-paragraph README explaining the convention. The two new keys go in your config block alongside the existing v2 keys:
+
+```json
+{
+  "portfolio": {
+    "registry":             "../apexyard-portfolio/apexyard.projects.yaml",
+    "projects_dir":         "../apexyard-portfolio/projects",
+    "ideas_backlog":        "../apexyard-portfolio/projects/ideas-backlog.md",
+    "onboarding":           "../apexyard-portfolio/onboarding.yaml",
+    "workspace_dir":        "../apexyard-portfolio/workspace",
+    "custom_skills_dir":    "../apexyard-portfolio/custom-skills",
+    "custom_handbooks_dir": "../apexyard-portfolio/custom-handbooks"
+  }
+}
+```
+
+The two `custom_*_dir` keys are optional — defaults resolve to `./custom-skills` and `./custom-handbooks` against the ops-fork root. For split-portfolio adopters, set them explicitly to the sibling repo so the dirs come out of the private layer.
+
+#### Authoring a custom skill
+
+Manual `cp + edit` is fine for v1 — there's no `/custom-skill` authoring helper:
+
+```bash
+cd ~/ops/apexyard-portfolio
+
+# Copy a framework skill as a starting shape (or write from scratch)
+cp -R ~/ops/apexyard/.claude/skills/feature custom-skills/file-internal-bug
+$EDITOR custom-skills/file-internal-bug/SKILL.md   # adjust frontmatter (name, description, argument-hint)
+
+git add custom-skills/file-internal-bug
+git commit -m "feat: add /file-internal-bug for the internal tracker"
+git push
+```
+
+Next session start in the public fork, the `link-custom-skills.sh` SessionStart hook surfaces the new skill as `.claude/skills/file-internal-bug/` and Claude Code starts discovering it.
+
+#### Authoring a custom handbook
+
+Same as the public-handbook convention — copy a sample, edit, commit:
+
+```bash
+cd ~/ops/apexyard-portfolio
+mkdir -p custom-handbooks/architecture
+cp ~/ops/apexyard/handbooks/architecture/clean-architecture-layers.md custom-handbooks/architecture/internal-pii-handling.md
+$EDITOR custom-handbooks/architecture/internal-pii-handling.md   # write the rule
+git add custom-handbooks/architecture/internal-pii-handling.md
+git commit -m "docs: handbook on internal PII handling"
+```
+
+Next code review, Rex globs both `handbooks/architecture/*.md` AND `<private>/custom-handbooks/architecture/*.md` and applies findings from both. Add `ENFORCEMENT: blocking` at the top of the file to opt the rule into REQUEST CHANGES verdicts; default is advisory.
+
+#### Out of scope (v1)
+
+- **Per-team / per-project handbook overrides.** Still framework-level only — handbooks travel with the ops fork (and the private layer for split-portfolio adopters). File a separate ticket if multi-team adopters need this.
+- **Encryption on top of gitignore for the private custom dirs.** They're inside a private GitHub repo; the gitignore on the public fork is the boundary.
+- **Distribution to other organisations.** Custom skills + handbooks are private to one org by design — sharing across orgs is what the public framework + handbooks layer is for.
+- **A `/custom-skill` authoring helper.** Manual `cp framework-skill custom-skills/...` + edit is fine for v1.
+- **Multi-version handbook conflict resolution.** Operator's prose responsibility.
+
+### Migrating from split-portfolio v1 to v2
+
+If you adopted split-portfolio mode before framework #242, your fork is on the v1 layout: `apexyard.projects.yaml` and `projects/` resolve to the sibling private repo (good), but `onboarding.yaml` and `workspace/` are still in the public fork. The v2 migration moves both to the private repo too, and writes the new `.apexyard-fork` anchor.
+
+**You don't need to run this manually — `/update` detects the v1 layout and offers the migration as a default-yes step during the next upstream sync.** When you run `/update` after pulling framework ≥ #242, you'll see:
+
+```
+ApexYard /update detected your fork is in split-portfolio mode (v1 layout):
+
+  - apexyard.projects.yaml     → resolved to a sibling private repo (good)
+  - projects/                  → resolved to a sibling private repo (good)
+  - onboarding.yaml            → still in this public fork (v1 layout)
+  - workspace/                 → still in this public fork (v1 layout)
+
+Split-portfolio v2 (introduced in framework #242) moves onboarding.yaml
+AND workspace/ to the private sibling repo too, so the public fork holds
+ONLY framework files + your customisations to skills/hooks/rules.
+
+Migrate now? This will:
+  - Move onboarding.yaml to the sibling private repo
+  - Move workspace/<name>/ contents to the sibling private repo
+  - Add gitignore entries for both in the public fork
+  - Write a .apexyard-fork marker (the v2 ops-fork anchor)
+  - Add portfolio.{onboarding,workspace_dir} keys to .claude/project-config.json
+
+Files MOVED, not copied — destructive. Idempotent — if interrupted, re-run.
+
+[Y / n / dry-run — show commands, don't execute]
+```
+
+The migration is **per-file-class confirmable** (move `onboarding.yaml`? Y/N; move `workspace/`? Y/N), so you can defer one and migrate the other. It's also **idempotent** — if you re-run `/update` later, the migration is a no-op.
+
+`/update --dry-run` walks through the migration steps without executing them, useful for previewing what would change.
+
+The skill **does not commit** — staging is the contract; you own both the public-fork commit AND the sibling-repo commit. After accepting the migration:
+
+```bash
+# Public fork — review what's staged + the marker + config-block additions
+git diff --cached
+git commit -m "chore: migrate to split-portfolio v2"
+
+# Private sibling repo — onboarding + workspace landed here
+cd ../apexyard-portfolio
+git status        # see the moved files
+git add onboarding.yaml workspace
+git commit -m "chore: receive onboarding + workspace from public fork (split-portfolio v2)"
+```
+
+**What if you want to migrate by hand?** Run the same steps the `/update` skill runs:
+
+```bash
+cd ~/ops/apexyard
+
+SIBLING=../apexyard-portfolio   # adjust to your sibling-dir name
+
+# Move the two file classes
+mv onboarding.yaml "$SIBLING/onboarding.yaml"
+mkdir -p "$SIBLING/workspace"
+for entry in workspace/*; do
+  [ -e "$entry" ] || continue
+  name=$(basename "$entry")
+  [ "$name" = "README.md" ] && continue   # framework file, stays
+  mv "$entry" "$SIBLING/workspace/$name"
+done
+
+# Update .gitignore in the public fork
+cat >> .gitignore <<'IGNORE'
+
+# Split-portfolio v2 (framework ≥ #242)
+onboarding.yaml
+workspace
+IGNORE
+
+# Write the v2 anchor
+echo "# This file marks the directory as an ApexYard ops fork (split-portfolio v2)." > .apexyard-fork
+
+# Update the config block — add the v2 keys
+jq --arg onb "$SIBLING/onboarding.yaml" \
+   --arg ws  "$SIBLING/workspace" \
+   '.portfolio.onboarding = (.portfolio.onboarding // $onb)
+    | .portfolio.workspace_dir = (.portfolio.workspace_dir // $ws)' \
+   .claude/project-config.json > /tmp/pc.json && mv /tmp/pc.json .claude/project-config.json
+
+git add .gitignore .apexyard-fork .claude/project-config.json
+```
 
 ### Migrating from single-fork to split-portfolio
 
@@ -431,8 +680,11 @@ Every portfolio skill reads `apexyard.projects.yaml` and iterates the registry.
 | `/idea` | Appends to `projects/ideas-backlog.md` at the fork root (one shared backlog for all projects) |
 | `/roadmap` | Reads `projects/<name>/roadmap.md`; asks which project if ambiguous |
 | `/stakeholder-update` | Portfolio rollup with a section per project |
-| `/handover` | Writes to `projects/<name>/handover-assessment.md` and appends the project to the registry |
+| `/handover` | Writes to `projects/<name>/handover-assessment.md`, appends the project to the registry, and offers (default-no) to clone the project into `workspace/<name>/` for an LSP-aware deep-dive follow-up (`/code-review`, `/threat-model`, `/security-review`). The clone offer surfaces the cost (disk, gitignored status, `ENABLE_LSP_TOOL=1` + per-language plugin install) explicitly. |
+| `/extract-features` | Scans a project's codebase across six discovery axes (HTTP routes, data models, async jobs, test names, UI screens, documented features) and writes a consolidated Feature Inventory at `projects/<name>/feature-inventory.md`. Pairs with `/handover` as the **greenfield-rewrite path** — `/handover` produces the high-level project assessment, `/extract-features` produces the granular "what we must preserve" catalogue. One-off scan, not a recurring audit; re-runs OFFER (default-no) to overwrite. |
+| `/process` | Anchor-scoped scan across **seven** process-discovery axes (explicit workflow definitions, queue/job chains, cron triggers, state-column transitions, API choreography, existing BPMN/Mermaid, documented steps) — optionally cross-repo via `apexyard.projects.yaml`. Interviews only on the gaps the code couldn't answer, then emits a lint-clean BPMN 2.0 file at `projects/<name>/processes/<slug>.bpmn`. Sibling to `/c4` (static system topology) and `/extract-features` (exhaustive feature catalogue) — same read-first-then-ask shape, BPMN as the output. Requires Node + npm for `bpmn-auto-layout` + `bpmnlint`; falls back to bare BPMN when Node is missing. |
 | `/c4` | Reads a project's codebase and writes filled-in C4 L1 + L2 Mermaid diagrams (location depends on invocation context — see `.claude/skills/c4/SKILL.md`) |
+| `/tech-vision` | Interactive section-by-section author for the **technical / architecture** vision template (named `tech-vision` to disambiguate from product / company vision). Walks the operator through Scope, Principles, Target-state C4 L1, Current vs Target gap table, multi-quarter Migration path, explicit Anti-scope ("things we explicitly chose NOT to build"), and Review cadence — then writes `projects/<name>/architecture/vision.md`. Resolves the template via `portfolio_resolve_template architecture/vision.md` so adopters with `<private_repo>/custom-templates/architecture/vision.md` see their shape. Re-runs OFFER (default-no) to overwrite; refresh mode preserves existing content as defaults for a quarterly review. Markdown-only output — Mermaid C4 block renders inline on GitHub, same as `/c4` / `/dfd`. See AgDR-0028. |
 
 Skills that aren't portfolio-aware (`/decide`, `/write-spec`, `/code-review`, `/security-review`, `/audit-deps`) operate on the current working directory — `cd workspace/<name>/` first if you want them to run against a specific project's code.
 
@@ -466,11 +718,40 @@ Decision rationale (tool choice — Mermaid C4 over Structurizr DSL / PlantUML /
 A typical morning as a CTO / Chief of Staff using apexyard:
 
 1. **`cd ~/apexyard`** — into your fork
-2. **`/inbox`** — see everything waiting on you across every managed project
-3. **`/status`** — snapshot of git + CI health for each project
-4. Pick a ticket, **`cd workspace/<project>/`**, pick up the ticket as the appropriate role (see [`.claude/rules/role-triggers.md`](../.claude/rules/role-triggers.md))
-5. Work the ticket — the role file drives behaviour, the lifecycle demo in the hero of the landing site walks through the full flow
-6. Back at the fork root, **`/stakeholder-update weekly`** on Fridays to generate the summary
+2. **`apexyard status`** (or `/status --briefing` inside Claude Code) — 4-line "where am I" briefing: active workspace, active ticket, branch, role. Covers the orient-yourself question in one paragraph.
+3. **`/inbox`** — see everything waiting on you across every managed project
+4. **`/status`** — full snapshot of git + CI health for each project (verbose form when you want the per-project breakdown)
+5. Pick a ticket, **`cd workspace/<project>/`**, pick up the ticket as the appropriate role (see [`.claude/rules/role-triggers.md`](../.claude/rules/role-triggers.md))
+6. Work the ticket — the role file drives behaviour, the lifecycle demo in the hero of the landing site walks through the full flow
+7. Back at the fork root, **`/stakeholder-update weekly`** on Fridays to generate the summary
+
+### `apexyard status` — the CLI briefing
+
+`bin/apexyard` is a small bash shim that exposes the briefing at the shell. Install once by symlinking it onto your PATH:
+
+```bash
+ln -s "$(pwd)/bin/apexyard" ~/.local/bin/apexyard
+```
+
+Then from anywhere inside the fork or any `workspace/<name>/` clone:
+
+```bash
+$ apexyard status
+Active workspace:  example-app
+Active ticket:     #42 — Add CSV export
+Branch:            feature/GH-42-csv-export
+Role set:          backend
+```
+
+The same output appears when you run `/status --briefing` (or `/status -b`) inside Claude Code. The four fields all infer themselves: workspace from cwd, ticket from the per-project marker (`<ops_root>/.claude/session/tickets/<name>`) or the ops fallback (`<ops_root>/.claude/session/current-ticket`), branch from `git branch --show-current`, role from the active ticket's labels. Where any of those is unknown, the briefing prints an explicit `(none)` / `(unknown)` / `<none — inferred per task>` placeholder so the four-line shape is constant regardless of state.
+
+Default `/status` (no flags) still produces the long per-project breakdown — `--briefing` only opts into the compact form.
+
+### LSP-aware skills inside a workspace
+
+If you've enabled the optional LSP tool (`ENABLE_LSP_TOOL=1` + a per-language plugin — see [`getting-started.md` § "Optional: LSP-aware code navigation"](getting-started.md#optional-lsp-aware-code-navigation)), code-aware skills like `/code-review`, `/threat-model`, and `/security-review` use semantic-index queries instead of grep when they run inside a cloned `workspace/<name>/`. The same skills fall back to grep + Read transparently when LSP is absent — there's no new failure mode, only optional speed.
+
+Cross-project portfolio skills (`/inbox`, `/tasks`, `/stakeholder-update`) walk the whole registry and stay on grep regardless, because no single LSP server has the full multi-repo view.
 
 ---
 
@@ -500,7 +781,9 @@ Every few weeks, pull the latest apexyard improvements into your fork. The easy 
 /update --dry-run    # preview only, no state change
 ```
 
-`/update` does the work of the manual flow below: fetches `upstream`, previews the commit delta, creates a sync branch (because `block-main-push.sh` forbids direct pushes to `main`), merges or rebases, walks through any conflicts with per-file options, and leaves the branch ready to push as a PR. See `.claude/skills/update/SKILL.md` for the full process.
+`/update` does the work of the manual flow below: fetches `upstream`, previews the commit delta, creates a sync branch (because `block-main-push.sh` forbids direct pushes to `main`), merges or rebases, walks through any conflicts with per-file options, surfaces any **deprecated config keys** in your `.claude/project-config.json` that no longer exist in upstream defaults (advisory y/n/s offer — see step 8 of the skill), and leaves the branch ready to push as a PR. See `.claude/skills/update/SKILL.md` for the full process.
+
+> **Pre-release testing (`/update --from-dev`).** A hidden `--from-dev` flag pulls from `upstream/dev` instead of the latest tagged release on `upstream/main`. Intended for the framework maintainer testing pre-release work on a separate machine, and for adopters who explicitly want to validate an upcoming framework change before the release tag is cut. **Not a supported general-adopter path** — the adopter contract is tagged releases from `upstream/main` (see [AgDR-0007](agdr/AgDR-0007-release-cut-branch-model.md)). Prints a `⚠ PRE-RELEASE SYNC` banner before any state mutation, uses the same sync-branch + conflict-resolution flow, and lands on a `chore/sync-upstream-dev` branch. Revert with `git reset --hard origin/main` if needed. See `.claude/skills/update/SKILL.md` § Options for details.
 
 If you prefer the raw commands:
 

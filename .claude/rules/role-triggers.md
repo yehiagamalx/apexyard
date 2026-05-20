@@ -46,6 +46,32 @@ Head of Product → Product Manager → Head of Design / UX Designer / UI Design
 
 Each handoff is explicit. The handing-off role delivers the artefact defined in its role file (PRD, tech design, PR, test plan, etc.); the receiving role reads it and moves forward.
 
+### How to signal activation
+
+When you activate, hand off, or exit a role, print a single-line marker at the top of your response. The reader sees who's driving the work right now.
+
+**Activation** — when entering a role:
+
+```
+▸ Activating Salim (QA Engineer) for #42 (trigger: ticket labeled `qa`)
+```
+
+**Handoff** — when one role hands off to another:
+
+```
+▸ Salim (QA Engineer) → Mariam (Product Manager) (handoff: acceptance criteria signed off)
+```
+
+**Exit** — when finishing a role and returning to ambient mode:
+
+```
+▸ Salim (QA Engineer) task complete — returning to ambient mode
+```
+
+The persona name comes from the `persona_name` field added in [#204](https://github.com/me2resh/apexyard/issues/204). If a future role doesn't have a persona name (custom adopter role), drop the name and use just the title (e.g. `▸ Activating QA Engineer for #42 …`). The triangle prefix (`▸`) makes the marker visually scannable.
+
+This is a **prose convention**, not a mechanically-enforced format. The sibling hook (`detect-role-trigger.sh`, from [#206](https://github.com/me2resh/apexyard/issues/206)) already injects an advisory reminder banner when a trigger fires; this convention adds the agent's response side so operators can see the transition in the conversation.
+
 ## Trigger Types
 
 **Auto-activation** — a role should activate automatically when its condition is detected in conversation context:
@@ -105,3 +131,23 @@ Roles deliver concrete artefacts at each handoff point. These are the contracts 
 Before this rule existed, the 19 role files were passive markdown docs — no trigger, no activation, no automatic reference from workflows or skills. A user had to manually say *"please read `roles/engineering/qa-engineer.md` and act as the QA Engineer"* for anything to happen.
 
 This file closes that gap. When in a Claude Code session under apexyard, the trigger table drives which role activates, and the workflow and skill files now explicitly reference the role files at every phase boundary. Roles are now **first-class participants** in the SDLC, not reference material.
+
+### Mechanical backstop — `detect-role-trigger.sh`
+
+Self-discipline (the agent remembering to read the role file when the rule fires) is the primary mechanism. The framework also ships a mechanical backstop: `.claude/hooks/detect-role-trigger.sh` scans for trigger conditions on every relevant tool call and emits a system-reminder-style banner naming the role + the file to read.
+
+Same advisory shape as `check-upstream-drift.sh` — non-blocking, exit 0 always. The banner cannot force the agent to adopt the role, but it removes the "I forgot the rule applied here" failure mode.
+
+Triggers wired in v1 (me2resh/apexyard#206):
+
+| Trigger family | Hook event | Detection | Role |
+|----------------|------------|-----------|------|
+| Label-based  | `PreToolUse` on `Bash` (matcher: `gh issue edit *`) | `--add-label qa` (single or comma list) | QA Engineer |
+| Diff/path    | `PreToolUse` on `Edit` / `Write` / `MultiEdit` | path contains `auth/`, `crypto/`, `secrets/`, `.env*` | Security Auditor |
+| Diff/path    | same | path under `.github/workflows/` or `golden-paths/pipelines/` | Platform Engineer |
+| Diff/path    | same | path under `docs/agdr/` | Tech Lead |
+| Prompted     | `UserPromptSubmit` | "act as the X" / "as the X" / "put on your X hat" (case-insensitive, X matches any role in the activation table) | the named role |
+
+Triggers from the table above that are **not** yet mechanically detected (e.g. "production incident mentioned" → SRE, "new PRD drafted" → Product Manager) still rely on self-discipline; the hook can be extended without changing the surrounding wiring.
+
+Tests live at `.claude/hooks/tests/test_detect_role_trigger.sh` and cover the three trigger families the acceptance criteria call out.
