@@ -5,6 +5,17 @@ argument-hint: "[--dry-run] [--rebase]"
 allowed-tools: Bash, Read, Write, Edit
 ---
 
+<!--
+  Hidden flag: --from-dev (NOT in description above, on purpose — see #250).
+  Pulls from upstream/dev instead of the latest tagged release. Adopter
+  contract is tagged releases; --from-dev is an opt-in for framework
+  maintainers and adopters who explicitly want to test pre-release work.
+  Documented in `## Usage` and `## Options` below for operators who read
+  the spec; deliberately omitted from `description` so /help does not
+  surface it.
+-->
+
+
 # /update — Sync ApexYard Fork from Upstream
 
 Single-command replacement for the manual "fetch → branch → merge → push → PR" dance that fork maintainers do to pull upstream apexyard changes into their ops fork.
@@ -27,7 +38,16 @@ Defaults match today's single-fork layout (`./apexyard.projects.yaml`, `./projec
 /update              # merge-based sync (default, safer)
 /update --rebase     # rebase local customisations on top of upstream
 /update --dry-run    # preview only, don't touch anything
+/update --from-dev   # (hidden) pull from upstream/dev — pre-release; expect breakage
 ```
+
+## Options
+
+| Flag | Effect |
+|------|--------|
+| `--rebase` | Rebase local commits onto upstream instead of merging. Cleaner linear history; rewrites local SHAs. |
+| `--dry-run` | Run the preview step only. Print the commit delta and exit; no fetch-after-preview, no branch creation, no merge. |
+| `--from-dev` | **Hidden / opt-in.** Sync from `upstream/dev` (pre-release work) instead of the latest `upstream/main` tag. Prints a `⚠ PRE-RELEASE SYNC` banner BEFORE any fetch/state-mutation. Same sync-branch + conflict-resolution flow; branch is named `chore/sync-upstream-dev` (or `chore/#<TICKET>-sync-upstream-dev` if a tracking issue is supplied). Intended for the framework maintainer (testing pre-release work on another machine) and for adopters who explicitly want to validate an upcoming framework change. **Not** in the skill's `description` frontmatter on purpose — `/help` should not surface it, since the adopter contract is tagged releases (see AgDR-0007 release-cut model). Combinable with `--rebase` and `--dry-run`. |
 
 ## Output
 
@@ -45,6 +65,44 @@ On up-to-date: one line, no state change.
 - You want to sync a specific feature branch from upstream. Out of scope — this skill is for default-branch fork sync only.
 
 ## Process
+
+### Pre-step: Parse flags + print pre-release banner (when --from-dev)
+
+Parse the invocation arguments first, BEFORE any fetch / branch / merge work:
+
+```bash
+FROM_DEV=0
+DRY_RUN=0
+REBASE=0
+for arg in "$@"; do
+  case "$arg" in
+    --from-dev) FROM_DEV=1 ;;
+    --dry-run)  DRY_RUN=1 ;;
+    --rebase)   REBASE=1 ;;
+  esac
+done
+
+# Resolve the upstream ref + sync-branch suffix once, at the top, so every
+# downstream step references the same target.
+if [ "$FROM_DEV" = "1" ]; then
+  UPSTREAM_REF=upstream/dev
+  BRANCH_SUFFIX=sync-upstream-dev
+else
+  UPSTREAM_REF=upstream/main
+  BRANCH_SUFFIX=sync-upstream-apexyard
+fi
+```
+
+If `FROM_DEV=1`, print this banner BEFORE doing anything else (in particular, before any `git fetch`, branch-create, or merge — operator must see the warning before any state mutation):
+
+```
+⚠ PRE-RELEASE SYNC — pulling from upstream/dev
+   This is unreleased work; expect breakage.
+   Revert with: git reset --hard origin/main
+   For supported updates, use /update (no flag) to pull tagged releases.
+```
+
+The banner restates the deal every invocation — an operator who used `--from-dev` once should not be surprised the next time they run plain `/update` and find themselves on a different code path. The banner is load-bearing on purpose: dropping it would let pre-release breakage land silently.
 
 ### 0. Mark this session as bootstrap (REQUIRED)
 
@@ -90,6 +148,8 @@ fi
 
 ### 2. Fetch both remotes
 
+`git fetch upstream --quiet` brings down all upstream branches by default (including `upstream/dev`), so a single fetch covers both the default and the `--from-dev` target. No conditional fetch needed.
+
 ```bash
 git fetch upstream --quiet
 git fetch origin --quiet
@@ -101,13 +161,17 @@ Network failure: print a warning and exit. Don't try to "work from cache" — us
 
 Two signals matter here: a new upstream **tag** (the actionable one, meaning a real release is available), and upstream **main commits** since the fork's last sync (informational — may just be a docs typo).
 
-```bash
-AHEAD=$(git rev-list --count upstream/main..main)
-BEHIND=$(git rev-list --count main..upstream/main)
+When `--from-dev` is set, the comparison target is `upstream/dev` instead of `upstream/main`, and tag-based signals are skipped (dev is by definition pre-release; there is no tag to compare against). The preview reports the commit delta against `upstream/dev` and the operator decides whether to proceed.
 
-# Tag-based signal — same comparison the SessionStart drift banner uses.
-UPSTREAM_TAG=$(git tag --list --sort=-v:refname --merged upstream/main | head -n 1)
-LOCAL_TAG=$(git tag --list --sort=-v:refname --merged main | head -n 1)
+```bash
+AHEAD=$(git rev-list --count "$UPSTREAM_REF"..main)
+BEHIND=$(git rev-list --count main.."$UPSTREAM_REF")
+
+# Tag-based signal applies only to the tagged-release path.
+if [ "$FROM_DEV" = "0" ]; then
+  UPSTREAM_TAG=$(git tag --list --sort=-v:refname --merged upstream/main | head -n 1)
+  LOCAL_TAG=$(git tag --list --sort=-v:refname --merged main | head -n 1)
+fi
 ```
 
 Then report. Examples:
@@ -146,6 +210,21 @@ Proceed with merge? [Y/n]
 ```
 
 Default answer is "yes" in this mode — there's a real release the user asked about by running `/update`.
+
+**`--from-dev` (pre-release):**
+
+```
+Pre-release sync: 7 unreleased commits on upstream/dev since fork's HEAD.
+
+Upstream/dev commits to pull in:
+  ab12cde feat(#250): /update --from-dev hidden flag
+  cd34efg fix(#248): tighten validation
+  ... (5 more)
+
+Proceed with merge from upstream/dev? [Y/n]
+```
+
+Default answer is "yes" — the operator opted into pre-release explicitly with the flag, the banner already warned them about breakage, and asking again would be nagging. Skip the tag-based prompts entirely; dev has no tags to compare.
 
 **Ahead and behind (typical fork):**
 
@@ -197,22 +276,31 @@ Rationale for diverging from the `#58` AC wording ("leaves updated local main"):
 # Find or create a tracking issue. If a recent "sync" issue is open, reuse its number.
 # Otherwise prompt the user to create one (or offer to create it via `gh issue create`).
 
-BRANCH="chore/#${TICKET}-sync-upstream-apexyard"
+# $BRANCH_SUFFIX was set in the pre-step:
+#   sync-upstream-apexyard  for upstream/main (default)
+#   sync-upstream-dev       for upstream/dev (--from-dev)
+if [ -n "$TICKET" ]; then
+  BRANCH="chore/#${TICKET}-${BRANCH_SUFFIX}"
+else
+  BRANCH="chore/${BRANCH_SUFFIX}"
+fi
 git checkout -b "$BRANCH"
 ```
 
 ### 6. Do the sync
 
+`$UPSTREAM_REF` was set in the pre-step (`upstream/main` by default, `upstream/dev` under `--from-dev`).
+
 **Merge path:**
 
 ```bash
-git merge upstream/main --no-edit
+git merge "$UPSTREAM_REF" --no-edit
 ```
 
 **Rebase path:**
 
 ```bash
-git rebase upstream/main
+git rebase "$UPSTREAM_REF"
 ```
 
 Capture stdout/stderr for the conflict-detection step.
@@ -257,12 +345,259 @@ git checkout main
 git branch -D "$BRANCH"
 ```
 
-### 8. Final state + next steps
+### 8. Detect deprecated config keys (advisory)
 
-On clean completion, print:
+After the merge / rebase has applied (so the new `.claude/project-config.defaults.json` is on disk), scan the adopter's `.claude/project-config.json` for **top-level keys that no longer exist in defaults** — typically a config block removed upstream (e.g. `voice_prompts` removed in me2resh/apexyard#157) that still lingers in the override as dead config.
+
+This is **advisory only**. Custom-extension keys an adopter has added (their own hooks, in-house extensions) are also surfaced — the detector cannot tell them apart from upstream-removed keys, and only the operator can. The y/n/s offer below is the human-in-the-loop step that disambiguates.
+
+#### Detection
+
+Source the helper and read the deprecated key list:
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/_lib-detect-deprecated-config.sh"
+DEPRECATED=$(detect_deprecated_config_keys)
+```
+
+Return values:
+
+- Empty → nothing to surface, skip to step 9.
+- One or more newline-separated key names → continue.
+
+The helper:
+
+- Reads only **top-level** keys (whole-block removals; sub-key renames are out of scope per the ticket).
+- Whitelists metadata keys with a leading underscore (`_comment`, `_schema_version`, `_team_comment`, etc.) — those aren't deprecated config blocks.
+- Returns silently with exit 1 if `jq` is missing or defaults file is absent (skill should skip detection in that case, not fail).
+
+#### Offer
+
+If `DEPRECATED` is non-empty, format and print:
 
 ```
-Synced to upstream/main @ <SHA> on branch <BRANCH>.
+ApexYard /update detected N config block(s) in .claude/project-config.json
+that no longer exist in upstream defaults:
+
+  - voice_prompts
+  - abandoned_block
+
+These keys may be:
+  (a) dead config from a block the framework removed upstream (e.g.
+      voice_prompts after #157), or
+  (b) custom extension keys you've added intentionally.
+
+The detector can't tell them apart — choose:
+
+  [y] yes, remove the listed keys from .claude/project-config.json
+  [n] no, leave them alone (they're harmless; you can clean up later)
+  [s] show me the keys + their current values before deciding
+```
+
+Read the operator's reply.
+
+| Reply | Action |
+|-------|--------|
+| `y` | Run `remove_deprecated_config_keys` (edits `.claude/project-config.json` in place, no commit), then `git add .claude/project-config.json` to stage the change for the operator's review. Print `Removed N keys. Staged for review — diff with: git diff --staged .claude/project-config.json`. |
+| `n` | Print `Leaving override untouched. Re-run /update later if you change your mind.` and continue to step 9. |
+| `s` | Run `show_deprecated_config_keys` (prints each key + current value), then re-prompt with the same y/n options (no `s` recursion). |
+
+The skill **never auto-removes without explicit `y`**. The skill **never auto-commits** — staging is the contract, the operator owns the commit.
+
+#### Why advisory, not destructive
+
+A custom-extension key indistinguishable from an upstream-removed key is a real possibility (e.g. an adopter who's ahead of defaults with their own block). The cost of incorrectly removing a custom block is much higher than the cost of one extra prompt — the y/n/s pattern matches the rest of `/update`'s "operator owns each material change" stance.
+
+### 8a. Migrate to split-portfolio v2 layout (advisory, default-yes)
+
+Detection. After the merge / rebase has applied the new `_lib-portfolio-paths.sh` + `_lib-ops-root.sh`, source the helper and check for **two** conditions that together identify a pre-v2 split-portfolio adopter:
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/_lib-read-config.sh"
+source "$(git rev-parse --show-toplevel)/.claude/hooks/_lib-portfolio-paths.sh"
+
+# Already v2 (or single-fork) — no migration needed.
+if portfolio_is_v2; then
+  V2_NEEDED=0
+elif ! jq -e '.portfolio.registry' .claude/project-config.json >/dev/null 2>&1; then
+  # No portfolio block at all → single-fork mode → no migration.
+  V2_NEEDED=0
+else
+  # Has a portfolio block (split-portfolio) but no .apexyard-fork marker
+  # → pre-v2 split-portfolio adopter. Migration applies.
+  V2_NEEDED=1
+fi
+```
+
+If `V2_NEEDED=0` → skip this step entirely and continue to step 9.
+
+If `V2_NEEDED=1`, present the offer:
+
+```
+ApexYard /update detected your fork is in split-portfolio mode (v1 layout):
+
+  - apexyard.projects.yaml     → resolved to a sibling private repo (good)
+  - projects/                  → resolved to a sibling private repo (good)
+  - onboarding.yaml            → still in this public fork (v1 layout)
+  - workspace/                 → still in this public fork (v1 layout)
+
+Split-portfolio v2 (introduced in framework #242) moves onboarding.yaml
+AND workspace/ to the private sibling repo too, so the public fork holds
+ONLY framework files + your customisations to skills/hooks/rules.
+
+Migrate now? This will:
+  - Move onboarding.yaml to the sibling private repo
+  - Move workspace/<name>/ contents to the sibling private repo
+  - Add gitignore entries for both in the public fork
+  - Write a .apexyard-fork marker (the v2 ops-fork anchor)
+  - Add portfolio.{onboarding,workspace_dir} keys to .claude/project-config.json
+
+Files MOVED, not copied — destructive. Idempotent — if interrupted, re-run.
+
+[Y / n / dry-run — show commands, don't execute]
+```
+
+If `--dry-run` was passed to `/update`, force the dry-run branch automatically (print the commands the migration would run, do not execute, then continue to step 9).
+
+Per-file-class confirmation — ask separately for `onboarding.yaml` and `workspace/`, so the operator can move one and defer the other:
+
+```
+Move onboarding.yaml? [Y/n]
+Move workspace/? [Y/n]   # surfaces the disk size: du -sh workspace
+```
+
+#### Migration steps
+
+For each file class the operator confirmed, run the moves below. Resolve the sibling repo dir from the existing `portfolio.registry` path (the parent dir of the registry file is the sibling repo root):
+
+```bash
+SIBLING_ROOT=$(dirname "$(jq -r '.portfolio.registry' .claude/project-config.json)")
+# e.g. SIBLING_ROOT=../apexyard-portfolio
+```
+
+##### Move onboarding.yaml
+
+```bash
+if [ -f onboarding.yaml ] && [ ! -f "$SIBLING_ROOT/onboarding.yaml" ]; then
+  mv onboarding.yaml "$SIBLING_ROOT/onboarding.yaml"
+  (cd "$SIBLING_ROOT" && git add onboarding.yaml)
+elif [ -f "$SIBLING_ROOT/onboarding.yaml" ] && [ -f onboarding.yaml ]; then
+  # Both present — surface the conflict and stop. The operator picks.
+  # `exit 1` (not `return 1`) — this snippet runs at top-level in the
+  # operator's shell when invoked from the skill; `return` would fail
+  # outside a function. Wrap the whole step 8a in `( ... )` if you want
+  # the exit contained to a subshell.
+  printf 'WARNING: onboarding.yaml exists in BOTH the public fork and the sibling repo.\n' >&2
+  printf '  Resolve manually before re-running /update.\n' >&2
+  exit 1
+fi
+```
+
+Idempotence: if `onboarding.yaml` is already only in the sibling repo, this block is a no-op.
+
+##### Move workspace/
+
+```bash
+if [ -d workspace ] && [ "$(ls -A workspace 2>/dev/null)" ]; then
+  mkdir -p "$SIBLING_ROOT/workspace"
+  # Move each entry individually so we don't trip on `mv` of a populated dir
+  # to an existing dir (some shells refuse).
+  for entry in workspace/*; do
+    [ -e "$entry" ] || continue
+    name=$(basename "$entry")
+    # workspace/README.md is a committed framework artefact explaining the
+    # workspace/*/ convention — it stays in the public fork (matches the
+    # manual recipe in docs/multi-project.md § "What if you want to migrate
+    # by hand?"). See AgDR-0021 § G for the rationale.
+    if [ "$name" = "README.md" ]; then
+      continue
+    fi
+    if [ -e "$SIBLING_ROOT/workspace/$name" ]; then
+      echo "WARNING: workspace/$name exists in BOTH locations — skipped."
+      continue
+    fi
+    mv "$entry" "$SIBLING_ROOT/workspace/$name"
+  done
+fi
+```
+
+Idempotence: empty `workspace/` (no entries to move) is a no-op.
+
+##### Update .gitignore
+
+```bash
+NEEDS=()
+grep -qxF onboarding.yaml .gitignore 2>/dev/null || NEEDS+=(onboarding.yaml)
+grep -qxF workspace .gitignore 2>/dev/null || NEEDS+=(workspace)
+
+if [ "${#NEEDS[@]}" -gt 0 ]; then
+  {
+    echo ""
+    echo "# Split-portfolio v2 (framework ≥ #242): onboarding + workspace live in the private sibling repo."
+    for n in "${NEEDS[@]}"; do echo "$n"; done
+  } >> .gitignore
+  git add .gitignore
+fi
+```
+
+##### Write the .apexyard-fork marker
+
+The marker is **presence-only**: readers (every ops-root walk) MUST ignore content; only file presence matters. Writers MAY include a single explanatory line so `head .apexyard-fork` is informative — both `echo "# comment" > .apexyard-fork` and `touch .apexyard-fork` are valid. See [AgDR-0021](../../../docs/agdr/AgDR-0021-split-portfolio-v2-path-resolution.md) § B.
+
+```bash
+if [ ! -f .apexyard-fork ]; then
+  echo "# This file marks the directory as an ApexYard ops fork (split-portfolio v2)." > .apexyard-fork
+  git add .apexyard-fork
+fi
+```
+
+##### Update .claude/project-config.json
+
+Add the two new keys to the `portfolio` block, pointing at the sibling repo. Use `jq` to merge so existing keys are preserved:
+
+```bash
+PCONFIG=.claude/project-config.json
+if [ -f "$PCONFIG" ]; then
+  TMP=$(mktemp)
+  jq --arg onb "$SIBLING_ROOT/onboarding.yaml" \
+     --arg ws "$SIBLING_ROOT/workspace" \
+     '.portfolio.onboarding = (.portfolio.onboarding // $onb)
+      | .portfolio.workspace_dir = (.portfolio.workspace_dir // $ws)' \
+     "$PCONFIG" > "$TMP" && mv "$TMP" "$PCONFIG"
+  git add "$PCONFIG"
+fi
+```
+
+Idempotence: `// $onb` short-circuits if the operator already added the key by hand.
+
+##### Final verification
+
+```bash
+portfolio_clear_cache
+if portfolio_validate >/dev/null 2>&1; then
+  echo "✓ Migration to split-portfolio v2 layout complete."
+  echo "  Files moved to: $SIBLING_ROOT"
+  echo "  Public-fork changes staged for review (git diff --cached)."
+  echo "  Don't forget to commit + push the sibling repo as well:"
+  echo "    cd $SIBLING_ROOT && git status"
+else
+  echo "✗ Migration left portfolio_validate broken — fix manually:"
+  portfolio_validate
+fi
+```
+
+The skill **does not commit** — staging is the contract; the operator owns both the public-fork commit AND the sibling-repo commit.
+
+#### Why advisory, not silent
+
+The migration moves real files between repos. If the operator has a custom workflow built on top of the in-fork `workspace/` location, an automatic move would silently break it. The y/n/dry-run pattern matches the deprecated-config-key offer in step 8 — operator owns each material change.
+
+### 9. Final state + next steps
+
+On clean completion, print (substituting `$UPSTREAM_REF` for the literal `upstream/main` so the operator sees the actual ref synced under `--from-dev`):
+
+```
+Synced to <UPSTREAM_REF> @ <SHA> on branch <BRANCH>.
 
   Commits merged:     <N>
   Files changed:      <F>
@@ -307,7 +642,7 @@ BODY
 Skill done. No remote state changed.
 ```
 
-### 9. Edge cases
+### 10. Edge cases
 
 | Situation | Handling |
 |-----------|----------|
@@ -319,6 +654,12 @@ Skill done. No remote state changed.
 | User chose rebase but has 50+ local commits | Warn about rewriting many SHAs, re-confirm |
 | Merge conflict the user aborts | Restore original branch state, delete sync branch, exit 1 |
 | Tracking issue for the sync doesn't exist | Offer to create one via `gh issue create`, get number, continue |
+| `jq` not installed (deprecated-config detection) | Skip step 8 silently; print one-line warning. The sync itself still completes. |
+| `.claude/project-config.json` missing (no override) | Skip step 8 silently — by definition no deprecated keys to surface. |
+| Operator answered `s` (show) | Print key + value, then re-prompt y/n (no `s` recursion). |
+| `--from-dev` passed but `upstream/dev` doesn't exist on the configured remote | Print: `upstream/dev not found — the configured upstream may not have a dev branch. Verify with: git ls-remote upstream dev`. Exit 1; no banner-suppression, no fallback to main. |
+| `--from-dev` combined with `--dry-run` | Banner prints first, then preview against `upstream/dev`, then exit 0. Same no-state-change semantics as plain `--dry-run`. |
+| `--from-dev` combined with `--rebase` | Allowed. Pre-release commits are rebased on top instead of merged; banner + branch convention unchanged. |
 
 ## Design notes
 
@@ -345,6 +686,16 @@ Two reasons:
 ### Dry-run semantics
 
 `--dry-run` simulates step 3 (preview) only. It does NOT simulate the merge itself — running `git merge --no-commit --no-ff` as a dry-run leaves the working tree in a staged state that's easy to accidentally commit. If the preview says N commits to pull in, the user should run `/update` for real to see the merge.
+
+### Why `--from-dev` is hidden (#250)
+
+The framework's adopter contract is "tagged releases from `upstream/main`" (release-cut model — see [AgDR-0007](../../../docs/agdr/AgDR-0007-release-cut-branch-model.md)). Adopters who pull from `dev` are signing up for breakage between releases — that's an opt-in behaviour, not a default. Three design choices flow from this:
+
+1. **Not in `description` frontmatter.** `/help` enumerates skill descriptions; surfacing `--from-dev` there would invite casual use and defeat the release-cut model's stability promise. The flag IS in `## Usage` and `## Options` so an operator who reads the spec finds it.
+2. **Banner before any state mutation.** An operator who used `--from-dev` once may not remember the deal next time. The banner prints BEFORE the first `git fetch`, restating the deal every invocation. Dropping it would let pre-release breakage land silently.
+3. **Same sync-branch + conflict-resolution flow as the default path.** A separate `/update-dev` skill would duplicate ~95% of the logic for a one-line flag-check difference; the flag-on-existing-skill shape is cheaper to maintain and means every safety check (sync branch, conflict resolution, no auto-merge) applies identically.
+
+Use cases that motivated the flag: the framework maintainer testing pre-release work on a separate machine before cutting a release tag; adopters validating an upcoming framework change before the wider rollout; CI workflows pinning to dev for integration testing (rare but legitimate).
 
 ## Cleanup (REQUIRED before exit)
 

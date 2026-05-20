@@ -44,6 +44,24 @@ Defaults match today's single-fork layout (`./apexyard.projects.yaml`, `./projec
 
 ## Process
 
+### 0. Write the active-issue-skill marker (REQUIRED — me2resh/apexyard#268)
+
+Before any `gh issue create` (or other tracker CLI), write this skill's name to the active-issue-skill marker so `require-skill-for-issue-create.sh` lets the command through. At skill entry:
+
+```bash
+ops_root="$(r=$PWD;while [ ! -f \"$r/onboarding.yaml\" ] && [ \"$r\" != / ];do r=${r%/*};done;echo $r)"
+mkdir -p "$ops_root/.claude/session"
+echo "migration" > "$ops_root/.claude/session/active-issue-skill"
+```
+
+Remove the marker on **every** exit path (success, early-exit, user cancel, error):
+
+```bash
+rm -f "$ops_root/.claude/session/active-issue-skill"
+```
+
+The `clear-issue-skill-marker.sh` SessionStart hook sweeps stale markers from killed sessions, but a clean exit should never leave one behind. See AgDR-0030.
+
 ### 1. Resolve the target project
 
 If the user passed `<project>`, use that. Otherwise:
@@ -94,7 +112,18 @@ Ask "Create ticket + AgDR? [y/N]". Only proceed on explicit `y`.
 
 ### 4. Create the AgDR first (local write, reversible)
 
-Copy `templates/agdr-migration.md` to the resolved path, filling in:
+Resolve the migration AgDR template via the portfolio helper so adopter overrides win when present:
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/_lib-read-config.sh"
+source "$(git rev-parse --show-toplevel)/.claude/hooks/_lib-portfolio-paths.sh"
+template=$(portfolio_resolve_template agdr-migration.md)   # → custom-templates/agdr-migration.md if present
+cp "$template" "$resolved_agdr_path"
+```
+
+Single-fork adopters (no `portfolio` block) and adopters with no override fall straight through to `templates/agdr-migration.md`. Adopters who want a customised migration-AgDR shape drop their version at `<private_repo>/custom-templates/agdr-migration.md`. See `templates/README.md` for the path-mirroring convention.
+
+Fill in:
 
 - Frontmatter (`id`, `timestamp`, `agent`, `model`, `trigger: user-prompt`, `status: draft`, `ticket` — left as `TBD` until step 5 creates the issue and we know the number)
 - The title, one-sentence summary, and every Section (Context, Options, Decision, Rollback Plan, Cross-Service Consumers, Testing Plan, Observability, Consequences) with the user's answers

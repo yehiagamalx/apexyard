@@ -11,6 +11,12 @@ Adopt an external repo into ApexYard management. The skill reads the target repo
 
 This is the bridge between "we just inherited this codebase" and "this codebase is now governed by our normal SDLC".
 
+## LSP-aware (optional, recommended)
+
+The handover deep-dive — reading the codebase to populate the assessment — performs semantic code navigation: finding definitions, walking references, tracing handlers across modules. With LSP enabled (`ENABLE_LSP_TOOL=1` + per-language plugin per `docs/getting-started.md`) **and** the repo cloned locally (see the clone-first prompt from me2resh/apexyard#188), queries are ~3-15× cheaper in token cost than grep + Read on shallow lookups, and ~1.4-5× cheaper on multi-hop traces. Without LSP — or when only metadata is available — the skill falls back to grep + Read transparently. No new failure mode, just optional speed during the deep-dive phase.
+
+Per-language LSP plugins live in Claude Code's marketplace. Install once; the skill detects the active language and dispatches automatically.
+
 ## Path resolution
 
 Read the registry path via `portfolio_registry`, the per-project docs dir via `portfolio_projects_dir`, and the ideas backlog via `portfolio_ideas_backlog` — all from `.claude/hooks/_lib-portfolio-paths.sh`. Source the helper at the top of any bash block that touches those paths:
@@ -389,7 +395,17 @@ If there's a `Dockerfile` at repo root but no `docker-compose.yml`: one containe
 
 #### Assembling the file
 
-Start from `templates/architecture/c4-container.md` (the template shipped in #50). Replace:
+Resolve the C4 container template via the portfolio helper so adopter overrides win when present:
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/_lib-read-config.sh"
+source "$(git rev-parse --show-toplevel)/.claude/hooks/_lib-portfolio-paths.sh"
+container_template=$(portfolio_resolve_template architecture/c4-container.md)
+```
+
+Single-fork adopters (no `portfolio` block) and adopters with no override fall straight through to `templates/architecture/c4-container.md` (the template shipped in #50). Adopters who want a customised C4 shape drop their version at `<private_repo>/custom-templates/architecture/c4-container.md`. See `templates/README.md` for the path-mirroring convention.
+
+Start from the resolved template. Replace:
 
 - `{Project Name}` → the project's real name (from the handover)
 - The sample `System_Boundary` contents → the containers you detected
@@ -422,7 +438,7 @@ Create `projects/<name>/architecture/` if missing.
 
 #### If there's nothing meaningful to draw
 
-If after scanning you find zero signals (no `package.json`, no `pyproject.toml`, no Dockerfile, no known framework, no DB), skip the file and note in the summary: `architecture/container.md: skipped (no container signals detected — add manually from templates/architecture/c4-container.md when ready)`. Better to write nothing than fabricate a wrong diagram.
+If after scanning you find zero signals (no `package.json`, no `pyproject.toml`, no Dockerfile, no known framework, no DB), skip the file and note in the summary: `architecture/container.md: skipped (no container signals detected — add manually from the C4 container template — resolve via portfolio_resolve_template architecture/c4-container.md — when ready)`. Better to write nothing than fabricate a wrong diagram.
 
 ### 7. Append to the portfolio registry
 
@@ -495,7 +511,87 @@ Skipping the auto-append. If you want to add it later, copy this into apexyard.p
     roles: {derived list}
 ```
 
-### 8. Offer validation (conditional, default-no)
+### 8. Offer the clone-first deep-dive option (recommended)
+
+You've just produced a metadata-only handover. The next natural step is a deeper dive — security audit, threat model, code-quality assessment. Those skills benefit substantially from a local clone + LSP-aware tooling, so offer the clone-first path here, with the cost transparently disclosed. Default is **no clone** — the operator has to type `y` explicitly.
+
+#### What to ask
+
+Print a single offer block. Use the project name resolved earlier in the flow as `<name>`, and the registry's `repo` field (or the URL the operator gave in step 1) as `<repo-url>`. Don't paraphrase — the prompt below is the exact shape:
+
+```
+Want me to clone <name> into workspace/<name>/ now? It enables
+LSP-aware navigation in /code-review, /threat-model, /security-review
+and the post-handover discovery skills (~3-15× cheaper than grep on
+shallow semantic queries; ~1.4-5× on multi-hop traces).
+
+Cost: ~tens of MB on disk + a one-time clone. The clone is gitignored
+from your fork (workspace/*/).
+
+Note: LSP requires `ENABLE_LSP_TOOL=1` and a per-language Claude Code
+LSP plugin installed (the plugin install is your problem — it's not
+bundled). Cross-project semantic queries still need grep (LSP is
+per-workspace). Cold-start on large monorepos can be 30+ seconds.
+Decline now if you'd rather configure that first or skip the deep dive.
+
+[y / n / later]
+```
+
+#### Cost-transparency requirements
+
+The offer **must** explicitly disclose:
+
+1. **`ENABLE_LSP_TOOL=1`** — the env var the harness reads to enable LSP
+2. **Per-language plugin install is the adopter's problem** — don't pretend the clone alone enables LSP
+3. **Disk cost** (~tens of MB) and gitignored status (`workspace/*/`)
+4. **Cross-project queries still need grep** — LSP is per-workspace
+5. **Cold-start cost on large monorepos** — 30+ seconds is realistic per the spike
+
+If any of these aren't surfaced in the offer, the adopter accepts a deal they don't understand. Don't compress the prompt past these five.
+
+#### Branching
+
+**On `y`:**
+
+1. Resolve `<repo-url>`. If the registry already has the repo slug (`me2resh/<name>` form), translate to `https://github.com/<owner>/<name>.git`. If the operator gave a path in step 1 instead of a URL, fall back to asking for the clone URL — never invent one.
+
+2. Resolve the workspace dir via the portfolio helper, then skip cleanly if the project clone already exists:
+
+   ```bash
+   source "$(git rev-parse --show-toplevel)/.claude/hooks/_lib-read-config.sh"
+   source "$(git rev-parse --show-toplevel)/.claude/hooks/_lib-portfolio-paths.sh"
+   WORKSPACE_DIR=$(portfolio_workspace_dir)
+   mkdir -p "$WORKSPACE_DIR"
+
+   if [ -d "$WORKSPACE_DIR/<name>" ]; then
+     echo "✓ $WORKSPACE_DIR/<name>/ already exists — skipping clone."
+   else
+     git clone <repo-url> "$WORKSPACE_DIR/<name>"
+   fi
+   ```
+
+   In single-fork mode `WORKSPACE_DIR` resolves to `<ops-root>/workspace`; in split-portfolio v2 mode it resolves to the sibling private repo (e.g. `../<fork>-portfolio/workspace`). Don't hardcode `workspace/<name>/`.
+
+3. On clone failure (private repo without credentials, network error, repo moved): report the exit code, point at `gh auth login` or a manual `git clone` as the recovery, and continue to the final summary. Do **not** retry, do **not** fall back to a different URL — the operator picks up from there.
+
+4. On clone success, suggest the next skill as a single follow-up question:
+
+   ```
+   ✓ Cloned into $WORKSPACE_DIR/<name>/.
+     Want to run /threat-model against the new clone now? (y/n)
+   ```
+
+   If the operator declines, mention `/code-review` and `/security-review` as the other natural follow-ups, then continue to the final summary. The skill never invokes follow-up skills automatically — the operator confirms each one.
+
+**On `n` or `later`:**
+
+Skip silently — no side effects, no further prompts. The adopter can clone manually anytime with `git clone <repo-url> "$WORKSPACE_DIR/<name>"`. Continue to the final summary.
+
+**On any other input:**
+
+Treat as `n` (no clone). Don't loop the prompt — the offer is one-shot.
+
+### 9. Offer validation (conditional, default-no)
 
 If the project looks **dormant** by the heuristic — last commit > 90 days ago AND zero open PRs AND no recent issue activity (rough thresholds, the skill can probe `gh repo view` + `gh pr list` + `gh issue list` to compute) — ask:
 
@@ -508,12 +604,13 @@ If the user accepts, hand off to `/validate-idea {name}` (which reads the just-w
 
 If the project is healthy (recent commits, active PRs/issues), skip the prompt entirely. Don't ask "should I validate?" on every handover — only when the dormancy signal warrants it.
 
-### 9. Return a summary
+### 10. Return a summary
 
 ```
 Handover assessment written: projects/{name}/handover-assessment.md
 Architecture stub:           projects/{name}/architecture/container.md ({written | preserved | skipped})
 Registry updated:            apexyard.projects.yaml ({added | skipped})
+Workspace clone:             workspace/{name}/ ({cloned | preserved | skipped (declined) | skipped (later) | failed: <reason>})
 Validation:                  {"completed — verdict <GREEN|YELLOW|RED>" | "skipped" | "not offered (project is active)"}
 
 Tech stack: {one-liner}
@@ -534,7 +631,7 @@ Top 3 next steps:
 4. **Auto-append to the registry** (with confirmation) — don't leave the user to copy-paste a snippet. Propose the append, validate the resulting YAML, roll back on failure.
 5. **Derive roles from the stack** — don't hard-code `[tech-lead, backend-engineer]`. The roles list depends on the actual tech stack, CI config, and security surface detected in step 3.
 6. **Derive next steps from the risks** — don't emit generic placeholders. Every "Next Step" must correspond to a specific finding from the Quality Risks section of the assessment.
-7. **Never auto-clone** — ask for the path.
+7. **Never auto-clone** — ask for the path in step 1, and offer (default-no) the optional clone in step 8. Clone only happens on an explicit operator `y`; `n` / `later` / unrecognised input all skip cleanly.
 8. **Never store secrets** — if `.env` is found, list its presence but never read its contents.
 9. **Status starts at `handover`** — moves to `active` only after the integration plan is executed.
 10. **Never break the registry** — if the YAML append breaks the file, restore the previous version and ask the user to edit manually.

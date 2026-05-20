@@ -1,8 +1,8 @@
 ---
 name: launch-check
-description: Production readiness audit — runs a multi-dimension sweep (security, accessibility, compliance, analytics, SEO, performance, monitoring, docs) and outputs a scored go/conditional-go/no-go verdict. Use at milestone boundaries, not on every PR.
+description: Production readiness audit — runs a multi-dimension sweep (security, accessibility, compliance, analytics, SEO, performance, monitoring, docs) and outputs a scored go/conditional-go/no-go verdict. Use at milestone boundaries, not on every PR. Persists each run to a per-project history store so the trend across runs is visible.
 disable-model-invocation: false
-argument-hint: "[project-path]"
+argument-hint: "[project-path] | trend [project-path]"
 effort: high
 ---
 
@@ -11,6 +11,11 @@ effort: high
 Runs an 8-dimension sweep against a project and outputs a one-page verdict. Designed for milestone boundaries — epic completion, release cuts, launch prep — not per-PR use.
 
 **Invoke from** the project's workspace directory (`cd workspace/<project>/`) or pass the path as an argument: `/launch-check workspace/my-app`.
+
+**Two modes:**
+
+- `/launch-check [project-path]` — full audit (default). Runs all 8 dimensions, persists results to the per-project history store, and renders a "Trend (last 5 runs)" section when ≥ 2 prior runs exist.
+- `/launch-check trend [project-path]` — read-only trend report. Renders just the trend section from existing run files. Useful for "are we trending up?" without burning the audit cost. See § "Trend-only mode" below.
 
 ## Deep-dive companions
 
@@ -216,9 +221,117 @@ Count PASS/WARN/FAIL, apply the verdict logic, format the output table.
 
 ### Step 5: Output
 
-Print the table exactly as shown in the "Output format" section above. Then stop and let the user decide what to do with the findings.
+Print the table exactly as shown in the "Output format" section above. Then continue to Step 6 to persist the run and render the trend section.
 
 **Do NOT auto-create tickets for the findings.** Offer: "Want me to create tickets for the blocking items?" — but let the user decide. The launch check is advisory.
+
+### Step 6: Persist the run + render the trend
+
+After the verdict table, persist this run to the project's history store via the shared audit-history lib and append a trend section if there are ≥ 2 prior runs.
+
+This step was refactored as part of #218 to consume `_lib-audit-history.sh` (the same lib that powers `/threat-model`, `/security-review`, and the other audit skills). Behaviour is preserved: the JSON schema is the same superset shape, the chart is rendered by the same `render-trend.sh` (dispatched from inside the lib), and adopters' existing run-history at the legacy path is still picked up by the trend renderer.
+
+#### 6a. Resolve project name + score + verdict
+
+`<project-name>` is the project's registered name in `apexyard.projects.yaml`. If the project isn't registered (e.g. someone runs `/launch-check` on a directory that's never been onboarded), use the basename of the project path; tell the operator to `/handover` it for cross-machine trend continuity.
+
+The headline score is the unweighted mean of `scores.*`, rounded to int. The verdict is one of `go` / `go-with-warnings` / `conditional-go` / `no-go` (launch-check-specific four-state vocabulary, preserved from the existing skill).
+
+#### 6b. Build payload + body, persist via the lib
+
+The lib's `audit_run_persist` accepts arbitrary stdin JSON and augments it with top-level `ts` / `dimension` / `verdict` / `score` fields, then writes both a JSON file and an MD file. For launch-check the JSON payload is a SUPERSET — it includes the legacy `scores{}` map (for `render-trend.sh` to plot) AND a derived `findings[]` array (for the canonical schema):
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/_lib-audit-history.sh"
+
+# Map each scored dimension to a Finding for the canonical schema.
+# Severity from score: ≥85 info, 70-84 low, 55-69 medium, 40-54 high, <40 critical.
+payload=$(mktemp); cat > "$payload" <<'EOF'
+{
+  "schema_version": 1,
+  "branch": "main",
+  "commit": "abc1234",
+  "scores": {
+    "security": 88, "accessibility": 94, "compliance": 76,
+    "analytics": 90, "seo": 87, "performance": 68,
+    "monitoring": 83, "docs": 91
+  },
+  "top_risks": ["No cookie consent banner", "Missing /health endpoint"],
+  "findings": [
+    {"id": "compliance",  "severity": "low",    "status": "open", "summary": "compliance score 76 — cookie consent banner missing"},
+    {"id": "performance", "severity": "medium", "status": "open", "summary": "performance score 68 — bundle > 250KB"}
+  ]
+}
+EOF
+
+# Body: the human-readable per-run summary launch-check already produces.
+body=$(mktemp); cat > "$body" <<'EOF'
+## Launch-check verdict: conditional-go
+
+| Dimension       | Score | Status |
+|-----------------|-------|--------|
+| Security        | 88    | PASS   |
+| Accessibility   | 94    | PASS   |
+| Compliance      | 76    | WARN   |
+| ...             | ...   | ...    |
+
+## Top risks
+
+1. No cookie consent banner
+2. Missing /health endpoint
+
+## Recommendations
+
+(...)
+EOF
+
+ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+audit_run_persist "<project-name>" "launch-check" "$ts" "conditional-go" 84 "$body" < "$payload"
+rm -f "$payload" "$body"
+```
+
+`audit_run_persist` writes:
+
+- `projects/<name>/audits/launch-check/runs/<ts>.json` — JSON with everything the lib added on top of the payload (top-level `ts`, `dimension: launch-check`, `verdict`, `score`, `schema_version`) AND everything in the original payload (`scores{}`, `branch`, `commit`, `top_risks[]`, `findings[]`, derived `stats{}`)
+- `projects/<name>/audits/launch-check/<ts>.md` — frontmatter + the body above
+- `projects/<name>/audits/launch-check/.gitignore` — driven by the per-dim `.audit-history-tracked` marker presence
+
+**JSON schema is a SUPERSET.** The canonical fields (`ts`, `dimension`, `verdict`, `score`, `findings[]`, `stats{}`, `schema_version`) coexist with the launch-check-specific fields (`scores{}`, `branch`, `commit`, `top_risks[]`). The legacy `render-trend.sh` reads `ts` / `scores` / `verdict` and works unchanged. The new generic `audit_render_trend` reads `ts` / `score` / `verdict` and works for the rest of the audit family.
+
+#### 6c. Render the trend section
+
+```bash
+audit_render_trend "<project-name>" "launch-check" 5
+```
+
+- The lib internally dispatches to `render-trend.sh` for the `launch-check` dimension — byte-equal output to the pre-#218 chart (mean of `scores.*` on Y-axis, score-delta notes, ASCII chart).
+- Crucially, the lib's `audit_run_list` merges JSON from the canonical path (`projects/<name>/audits/launch-check/runs/`) AND the legacy path (`projects/<name>/launch-check/runs/`) — so adopters' existing history continues to render across the migration. No `mv` required.
+- Output is a markdown trend block (heading + table + ASCII chart). Append it to this run's MD artefact and to the chat output.
+
+#### 6d. Opt-in commit (history-tracked marker)
+
+The per-dimension marker (`.audit-history-tracked`) sits inside the dimension's audit dir and controls whether `runs/*.json` files are gitignored:
+
+```bash
+# Opt in to commit launch-check history
+touch projects/<name>/audits/launch-check/.audit-history-tracked
+```
+
+The lib re-evaluates the marker on every persist; toggling is free. The MD artefact at `<dim_dir>/<ts>.md` is committed regardless — that's the durable human-readable artefact.
+
+**Migration note for adopters with existing history:** the legacy marker at `projects/<name>/launch-check/.launch-check-history-tracked` continues to apply to that path's `runs/`. To consolidate trees, `mv projects/<name>/launch-check/* projects/<name>/audits/launch-check/` after backing up; the lib's renderer will read the consolidated tree on the next run. Consolidation is optional — the read-merge happens transparently if you leave both trees in place.
+
+## Trend-only mode — `/launch-check trend [project-path]`
+
+Read-only mode that produces just the trend section (no full audit, no per-dimension grep). Useful for "are we trending up?" without re-running the costly sweep.
+
+Process:
+
+1. Source `_lib-audit-history.sh` (same as Step 6).
+2. Call `audit_render_trend "<project-name>" "launch-check" 5`. The lib reads both the canonical path AND the legacy path; if the merged set has < 2 runs the call is silent and you tell the operator there's no trend yet.
+3. Print the renderer's output.
+
+Do NOT run the 8-dimension sweep in this mode. Do NOT write any new JSON. This mode is purely for reviewing existing history.
 
 ## Rules
 
@@ -229,3 +342,19 @@ Print the table exactly as shown in the "Output format" section above. Then stop
 5. **Advisory, not blocking.** The user decides go/no-go based on the findings. The skill does NOT block deploys mechanically.
 6. **Don't create tickets unprompted.** Offer to create them. Let the user decide.
 7. **Run from the project directory.** The skill checks `workspace/<project>/`, not the ops repo.
+8. **Persist every run via the lib.** Step 6 always calls `audit_run_persist`, regardless of opt-in commit state. The `.audit-history-tracked` marker only controls whether the JSON files are committed; the MD artefacts are committed unconditionally and persistence happens on every run.
+9. **Resolve paths via the lib.** `audit_resolve_dir` (inside `_lib-audit-history.sh`) calls `portfolio_projects_dir` for you — the SKILL doesn't need to source the portfolio helper directly any more.
+
+## Implementation notes
+
+Persistence + trend logic ships as a shared shell helper that all audit skills consume:
+
+| File | Purpose |
+|------|---------|
+| `.claude/hooks/_lib-audit-history.sh` | Audit-history library shared with /threat-model, /security-review, etc. (4 functions: `audit_resolve_dir`, `audit_run_persist`, `audit_run_list`, `audit_render_trend`) |
+| `render-trend.sh` (this skill's dir) | Legacy chart renderer for the launch-check dimension; the lib's `audit_render_trend` dispatches to it when the dimension is `launch-check` so the chart shape stays byte-equal across the #218 refactor |
+
+Design rationale:
+
+- ASCII chart vs Mermaid, JSON schema choice, opt-in commit marker: see [`docs/agdr/AgDR-0014-launch-check-trend-tracking.md`](../../../docs/agdr/AgDR-0014-launch-check-trend-tracking.md)
+- Audit-history lib shape, JSON+MD pair, launch-check backward-compat strategy: see [`docs/agdr/AgDR-0019-audit-artefact-persistence.md`](../../../docs/agdr/AgDR-0019-audit-artefact-persistence.md) and [`docs/technical-designs/audit-artefact-persistence.md`](../../../docs/technical-designs/audit-artefact-persistence.md)
