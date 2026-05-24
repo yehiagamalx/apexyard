@@ -3,6 +3,8 @@
 https://github.com/me2resh/apexyard.*
 https://github.com/me2resh/curios-dog.*
 https://github.com/me2resh/SharpPick.*
+https://github.com/yehiagamalx/.*
+https://analytics\.arab-reform\.net/.*
 
 # Medium author URLs return 403 to bot user-agents (transient anti-scraping
 # protection). The link works in browsers; lychee-action's user-agent gets
