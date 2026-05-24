@@ -1,6 +1,6 @@
 ---
 name: tech-vision
-description: Interactive section-by-section author for the architecture vision template. Interviews the operator on Scope, Principles, Target-state architecture, Current vs Target, Migration path, anti-scope ("things we explicitly chose NOT to build"), and Review cadence — then writes the assembled vision to `projects/<name>/architecture/vision.md` via the custom-templates resolver. Sibling to `/c4` (static topology) and `/dfd` (data flow) in the architecture-doc family.
+description: Interactive author for the architecture vision template — target, gap, migration, anti-scope, cadence.
 argument-hint: "[project-slug | . | --framework]"
 allowed-tools: Bash, Read, Grep, Glob, Write
 ---
@@ -231,3 +231,7 @@ Surface the natural next-steps the operator likely wants:
 - **Vision enforcement** (Rex checking whether new code matches the vision) — that's a `/decide` + AgDR concern, not a vision-doc one.
 - **Multi-team vision composition** — one vision per system / domain.
 - **Vision-doc trend tracking** across quarterly reviews — use `git log projects/<name>/architecture/vision.md` and the AgDR history instead.
+
+---
+
+*Part of [ApexYard](https://github.com/me2resh/apexyard) — multi-project SDLC framework for Claude Code · MIT.*

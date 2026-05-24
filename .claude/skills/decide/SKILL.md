@@ -1,6 +1,6 @@
 ---
 name: decide
-description: Make a technical decision with structured reasoning, creating an Agent Decision Record (AgDR). Use when choosing between libraries, frameworks, implementation approaches, or architectural patterns.
+description: Make a technical decision with structured reasoning and create an Agent Decision Record (AgDR).
 disable-model-invocation: true
 argument-hint: "<what you're deciding>"
 ---
@@ -124,3 +124,7 @@ Proceeding with: {brief action}
 4. **Justification required** — `because` clause is mandatory
 5. **Timestamp precise** — full ISO-8601 with time
 6. **Slug from title** — lowercase, hyphens, max 50 chars
+
+---
+
+*Part of [ApexYard](https://github.com/me2resh/apexyard) — multi-project SDLC framework for Claude Code · MIT.*

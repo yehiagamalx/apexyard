@@ -1,6 +1,6 @@
 ---
 name: analytics-audit
-description: Analytics coverage and event taxonomy audit — SDK configuration, event naming, funnel completeness, dashboard existence. Deep-dive companion to /launch-check's analytics dimension.
+description: Analytics audit — SDK config, event naming, funnel completeness, dashboards. Deep-dive for /launch-check analytics.
 disable-model-invocation: false
 argument-hint: "[project-path]"
 effort: medium
@@ -120,3 +120,7 @@ touch projects/<name>/audits/analytics-audit/.audit-history-tracked
 4. **Privacy-aware.** Flag if PII (email, name, IP) is being sent in event properties.
 5. **Always persist via the lib.** The persist step runs regardless of opt-in commit state.
 6. **Severity vocabulary in the JSON is lowercase.** The lib expects `critical`/`high`/`medium`/`low`/`info`.
+
+---
+
+*Part of [ApexYard](https://github.com/me2resh/apexyard) — multi-project SDLC framework for Claude Code · MIT.*

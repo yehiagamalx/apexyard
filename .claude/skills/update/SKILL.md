@@ -1,7 +1,7 @@
 ---
 name: update
-description: Sync the ApexYard fork (ops repo) with upstream me2resh/apexyard. Fetches upstream, previews pending commits, merges (or rebases) on a sync branch, handles conflicts, and leaves a branch ready to push as a PR. Use when the SessionStart drift banner says the fork is behind, or periodically as fork maintenance.
-argument-hint: "[--dry-run] [--rebase]"
+description: Sync the ApexYard fork with upstream — preview, merge-or-rebase on a sync branch, walk per-version migrations.
+argument-hint: "[--dry-run] [--rebase] [--from-version vN.N.N] [--skip-migrations]"
 allowed-tools: Bash, Read, Write, Edit
 ---
 
@@ -35,10 +35,12 @@ Defaults match today's single-fork layout (`./apexyard.projects.yaml`, `./projec
 ## Usage
 
 ```
-/update              # merge-based sync (default, safer)
-/update --rebase     # rebase local customisations on top of upstream
-/update --dry-run    # preview only, don't touch anything
-/update --from-dev   # (hidden) pull from upstream/dev — pre-release; expect breakage
+/update                              # merge-based sync (default, safer)
+/update --rebase                     # rebase local customisations on top of upstream
+/update --dry-run                    # preview only, don't touch anything
+/update --from-version v1.2.0        # override the version anchor (use when fork anchor is missing/wrong)
+/update --skip-migrations            # files-only sync; do NOT run the per-version migration chain
+/update --from-dev                   # (hidden) pull from upstream/dev — pre-release; expect breakage
 ```
 
 ## Options
@@ -46,8 +48,10 @@ Defaults match today's single-fork layout (`./apexyard.projects.yaml`, `./projec
 | Flag | Effect |
 |------|--------|
 | `--rebase` | Rebase local commits onto upstream instead of merging. Cleaner linear history; rewrites local SHAs. |
-| `--dry-run` | Run the preview step only. Print the commit delta and exit; no fetch-after-preview, no branch creation, no merge. |
-| `--from-dev` | **Hidden / opt-in.** Sync from `upstream/dev` (pre-release work) instead of the latest `upstream/main` tag. Prints a `⚠ PRE-RELEASE SYNC` banner BEFORE any fetch/state-mutation. Same sync-branch + conflict-resolution flow; branch is named `chore/sync-upstream-dev` (or `chore/#<TICKET>-sync-upstream-dev` if a tracking issue is supplied). Intended for the framework maintainer (testing pre-release work on another machine) and for adopters who explicitly want to validate an upcoming framework change. **Not** in the skill's `description` frontmatter on purpose — `/help` should not surface it, since the adopter contract is tagged releases (see AgDR-0007 release-cut model). Combinable with `--rebase` and `--dry-run`. |
+| `--dry-run` | Run the preview step only. Print the commit delta and exit; no fetch-after-preview, no branch creation, no merge. **Does NOT execute migrations** — only previews the planned chain. |
+| `--from-version vN.N.N` | Explicit version-anchor override. Use when `.claude/framework-version` is missing (legacy fork pre-v1.4.0) OR you've manually rolled back and the anchor is stale. The chain is built against this value instead of the file. Refuses if the value doesn't match `vMAJOR.MINOR.PATCH`. |
+| `--skip-migrations` | Sync the framework files but DO NOT run the per-version migration chain. Prints an advisory warning naming each skipped pair and reminding the operator that the migrations can be replayed later with `bash .claude/migrations/<pair>.sh`. The anchor file IS still advanced to the new release tag, so subsequent runs won't re-offer the same migrations. Use sparingly — the chain is the point. |
+| `--from-dev` | **Hidden / opt-in.** Sync from `upstream/dev` (pre-release work) instead of the latest `upstream/main` tag. Prints a `⚠ PRE-RELEASE SYNC` banner BEFORE any fetch/state-mutation. Same sync-branch + conflict-resolution flow; branch is named `chore/sync-upstream-dev` (or `chore/#<TICKET>-sync-upstream-dev` if a tracking issue is supplied). Intended for the framework maintainer (testing pre-release work on another machine) and for adopters who explicitly want to validate an upcoming framework change. **Not** in the skill's `description` frontmatter on purpose — `/help` should not surface it, since the adopter contract is tagged releases (see AgDR-0007 release-cut model). Combinable with `--rebase` and `--dry-run`. **When `--from-dev` is set, the migration chain is automatically skipped** — pre-release work doesn't have a release tag to anchor against. |
 
 ## Output
 
@@ -74,12 +78,18 @@ Parse the invocation arguments first, BEFORE any fetch / branch / merge work:
 FROM_DEV=0
 DRY_RUN=0
 REBASE=0
-for arg in "$@"; do
-  case "$arg" in
-    --from-dev) FROM_DEV=1 ;;
-    --dry-run)  DRY_RUN=1 ;;
-    --rebase)   REBASE=1 ;;
+SKIP_MIGRATIONS=0
+FROM_VERSION_OVERRIDE=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --from-dev)         FROM_DEV=1 ;;
+    --dry-run)          DRY_RUN=1 ;;
+    --rebase)           REBASE=1 ;;
+    --skip-migrations)  SKIP_MIGRATIONS=1 ;;
+    --from-version)     shift; FROM_VERSION_OVERRIDE="$1" ;;
+    --from-version=*)   FROM_VERSION_OVERRIDE="${1#--from-version=}" ;;
   esac
+  shift
 done
 
 # Resolve the upstream ref + sync-branch suffix once, at the top, so every
@@ -87,9 +97,20 @@ done
 if [ "$FROM_DEV" = "1" ]; then
   UPSTREAM_REF=upstream/dev
   BRANCH_SUFFIX=sync-upstream-dev
+  # Pre-release work has no release tag — chain walking is meaningless.
+  SKIP_MIGRATIONS=1
 else
   UPSTREAM_REF=upstream/main
   BRANCH_SUFFIX=sync-upstream-apexyard
+fi
+
+# Validate --from-version shape early (semver-core only; pre-release suffix
+# is not supported, in line with the chain helper's contract).
+if [ -n "$FROM_VERSION_OVERRIDE" ]; then
+  if ! echo "$FROM_VERSION_OVERRIDE" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+    echo "--from-version: expected vMAJOR.MINOR.PATCH (got '$FROM_VERSION_OVERRIDE')." >&2
+    exit 1
+  fi
 fi
 ```
 
@@ -446,24 +467,31 @@ AND workspace/ to the private sibling repo too, so the public fork holds
 ONLY framework files + your customisations to skills/hooks/rules.
 
 Migrate now? This will:
-  - Move onboarding.yaml to the sibling private repo
-  - Move workspace/<name>/ contents to the sibling private repo
+  - COPY onboarding.yaml to the sibling private repo (sibling becomes
+    canonical) + untrack it from the public fork (snapshot left on disk)
+  - MOVE workspace/<name>/ contents to the sibling private repo
   - Add gitignore entries for both in the public fork
   - Write a .apexyard-fork marker (the v2 ops-fork anchor)
   - Add portfolio.{onboarding,workspace_dir} keys to .claude/project-config.json
 
-Files MOVED, not copied — destructive. Idempotent — if interrupted, re-run.
+onboarding.yaml is COPIED (not moved) — the file is small, the legacy
+ops-root walk still reads it as a fallback anchor, and a public-fork
+snapshot is a useful safety net while the sibling-repo copy becomes
+the source of truth. workspace/ is MOVED — clones are gigabytes; we
+don't double disk. See AgDR-0021 § "v1→v2 migration semantics".
+
+Idempotent — if interrupted, re-run.
 
 [Y / n / dry-run — show commands, don't execute]
 ```
 
 If `--dry-run` was passed to `/update`, force the dry-run branch automatically (print the commands the migration would run, do not execute, then continue to step 9).
 
-Per-file-class confirmation — ask separately for `onboarding.yaml` and `workspace/`, so the operator can move one and defer the other:
+Per-file-class confirmation — ask separately for `onboarding.yaml` and `workspace/`, so the operator can migrate one and defer the other:
 
 ```
-Move onboarding.yaml? [Y/n]
-Move workspace/? [Y/n]   # surfaces the disk size: du -sh workspace
+Copy onboarding.yaml to sibling private repo? [Y/n]
+Move workspace/?                              [Y/n]   # surfaces disk size: du -sh workspace
 ```
 
 #### Migration steps
@@ -475,25 +503,34 @@ SIBLING_ROOT=$(dirname "$(jq -r '.portfolio.registry' .claude/project-config.jso
 # e.g. SIBLING_ROOT=../apexyard-portfolio
 ```
 
-##### Move onboarding.yaml
+##### Copy onboarding.yaml (NOT move — see AgDR-0021 § "v1→v2 migration semantics")
 
 ```bash
 if [ -f onboarding.yaml ] && [ ! -f "$SIBLING_ROOT/onboarding.yaml" ]; then
-  mv onboarding.yaml "$SIBLING_ROOT/onboarding.yaml"
+  # COPY (cp -p preserves mtimes/permissions). The sibling-repo copy
+  # becomes the canonical source of truth; the public-fork copy is left
+  # on disk as a snapshot for the legacy ops-root walk-up fallback.
+  cp -p onboarding.yaml "$SIBLING_ROOT/onboarding.yaml"
   (cd "$SIBLING_ROOT" && git add onboarding.yaml)
+
+  # Untrack from the public fork so future commits don't ship it.
+  # The file stays on disk (gitignored in the next sub-step) as a
+  # legacy-tool snapshot.
+  git rm --cached onboarding.yaml 2>/dev/null || true
 elif [ -f "$SIBLING_ROOT/onboarding.yaml" ] && [ -f onboarding.yaml ]; then
-  # Both present — surface the conflict and stop. The operator picks.
-  # `exit 1` (not `return 1`) — this snippet runs at top-level in the
-  # operator's shell when invoked from the skill; `return` would fail
-  # outside a function. Wrap the whole step 8a in `( ... )` if you want
-  # the exit contained to a subshell.
-  printf 'WARNING: onboarding.yaml exists in BOTH the public fork and the sibling repo.\n' >&2
-  printf '  Resolve manually before re-running /update.\n' >&2
-  exit 1
+  # Both present — sibling is canonical; we still need to untrack the
+  # public-fork copy if it's currently tracked. Idempotent.
+  git rm --cached onboarding.yaml 2>/dev/null || true
 fi
 ```
 
-Idempotence: if `onboarding.yaml` is already only in the sibling repo, this block is a no-op.
+Idempotence: re-running this block on a v2 layout is a no-op (the second branch's `git rm --cached` returns non-zero when the file is already untracked, suppressed by `|| true`; the first branch is gated by the negated `[ ! -f "$SIBLING_ROOT/onboarding.yaml" ]`).
+
+**Why copy, not move?** Three reasons codified in AgDR-0021 § H:
+
+1. **Legacy ops-root walk-up fallback** — `_lib-ops-root.sh` checks `.apexyard-fork` first, but falls back to `onboarding.yaml + apexyard.projects.yaml` for un-migrated forks. Leaving a snapshot in the public fork keeps the legacy path working even if the marker is accidentally removed.
+2. **Safety net** — `onboarding.yaml` is small (KB, not GB). A duplicate on disk costs nothing meaningful and gives the operator a recoverable reference if the sibling repo is unreachable.
+3. **Canonical source of truth in the sibling** — the public-fork copy is untracked (`git rm --cached`) and gitignored, so it cannot drift into commits. The sibling repo's copy is the one /setup writes to and /handover reads.
 
 ##### Move workspace/
 
@@ -513,7 +550,7 @@ if [ -d workspace ] && [ "$(ls -A workspace 2>/dev/null)" ]; then
       continue
     fi
     if [ -e "$SIBLING_ROOT/workspace/$name" ]; then
-      echo "WARNING: workspace/$name exists in BOTH locations — skipped."
+      echo "WARNING: workspace/$name exists in BOTH locations — skipped." >&2
       continue
     fi
     mv "$entry" "$SIBLING_ROOT/workspace/$name"
@@ -592,6 +629,243 @@ The skill **does not commit** — staging is the contract; the operator owns bot
 
 The migration moves real files between repos. If the operator has a custom workflow built on top of the in-fork `workspace/` location, an automatic move would silently break it. The y/n/dry-run pattern matches the deprecated-config-key offer in step 8 — operator owns each material change.
 
+### 8b. Walk the intermediate-release migration chain
+
+When an adopter jumps multiple releases at once (e.g. v1.0.0 → v1.4.0) the framework needs to run **every** per-version migration in order, not just the latest. The chain walker reads `.claude/framework-version` (the version anchor), compares against the latest upstream tag, builds the ordered list of pairs, and offers each migration with a `[Y / n / show-diff / skip-all]` prompt.
+
+See [`AgDR-0032`](../../../docs/agdr/AgDR-0032-update-chain-migrations.md) for the design rationale (why a file anchor over derived signals, why per-pair scripts, why per-step confirmation).
+
+This step **always** runs after step 8a (which handles the legacy single-shot split-portfolio v1→v2 detection — that migration is now also encoded as the `v1.2.0-to-v1.3.0.sh` chain script for adopters whose anchor file says they're still on v1.2.0). Step 8a remains as a fallback for adopters who lack the version anchor entirely and would otherwise miss the split-portfolio migration.
+
+#### Detection
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/_lib-migration-chain.sh"
+
+# Where are we now? Falls back to "unknown" if the anchor is absent.
+CURRENT_VERSION=$(migration_current_version)
+
+# Operator override always wins (covers the "anchor lost" case).
+if [ -n "$FROM_VERSION_OVERRIDE" ]; then
+  CURRENT_VERSION="$FROM_VERSION_OVERRIDE"
+fi
+
+# Target is the latest tag we just pulled in.
+TARGET_VERSION=$(git tag --list --sort=-v:refname --merged upstream/main | head -n 1)
+```
+
+If `TARGET_VERSION` is empty (no tags reachable — rare but possible on a fresh fork), skip the chain entirely and print one warning line.
+
+#### "Unknown" anchor branch — interactive
+
+If `CURRENT_VERSION="unknown"` AND `--from-version` was NOT passed:
+
+```
+ApexYard /update: no .claude/framework-version anchor in this fork.
+This is normal on a fork created before framework v1.4.0.
+
+To run the per-version migration chain to <TARGET_VERSION>, I need to
+know which release this fork was last aligned with. Options:
+
+  [a] v1.0.0  — earliest tagged release
+  [b] v1.1.0
+  [c] v1.2.0
+  [d] v1.3.0  — most recent before <TARGET_VERSION>
+  [e] skip migrations (files-only — advance anchor to <TARGET_VERSION> with no migrations)
+  [f] abort sync
+
+Choose [d]:
+```
+
+Default is the second-newest tag (most likely the case for adopters who synced recently but predate the anchor file). The list is built dynamically from `migration_known_versions` so future releases auto-extend the menu.
+
+`[e]` is the same code path as `--skip-migrations` but reached through the interactive flow.
+
+`[f]` aborts the sync, restores the original branch state, and exits 1 — the operator can rerun `/update --from-version vN.N.N` once they've confirmed which version their fork is on.
+
+#### Build the chain
+
+```bash
+CHAIN=$(migration_chain "$CURRENT_VERSION" "$TARGET_VERSION")
+```
+
+| Result | Meaning |
+|--------|---------|
+| Non-empty newline-separated list | The chain we'll walk |
+| Empty AND `CURRENT_VERSION = TARGET_VERSION` | Already up to date, skip cleanly |
+| Empty AND `CURRENT_VERSION > TARGET_VERSION` | Going backwards — refuse; print warning; skip the chain |
+| Empty AND a known link is missing | Refuse (a release without a migration script is a framework bug — log and bail) |
+
+When the chain is non-empty, print the planned walk before running anything:
+
+```
+Per-version migration chain (3 steps):
+  1. v1.0.0 → v1.1.0   (.claude/migrations/v1.0.0-to-v1.1.0.sh)
+  2. v1.1.0 → v1.2.0   (.claude/migrations/v1.1.0-to-v1.2.0.sh)
+  3. v1.2.0 → v1.3.0   (.claude/migrations/v1.2.0-to-v1.3.0.sh)
+
+Each step is operator-confirmable. You can skip any individual step,
+skip the rest with `skip-all`, or see the script with `show-diff`.
+```
+
+If `--dry-run` is set, print the chain and exit before any `migration_run` invocation.
+
+#### Per-step prompt
+
+For each pair in the chain, prompt:
+
+```
+Step N/M — <PAIR>
+  Script: .claude/migrations/<PAIR>.sh
+  Lines:  <wc -l output>
+
+[Y] apply (run the script)
+[n] skip this step (advance anchor anyway)
+[d] show-diff (print the script body, then re-prompt y/n)
+[a] skip-all remaining steps
+```
+
+Default `[Y]`. On `d`, print the script and re-prompt (no `d` recursion). On `a`, set a one-shot flag and skip all remaining steps (anchor still advances).
+
+#### Run the migration
+
+```bash
+# Exit code contract:
+#   0 — applied (or no-op success branch)
+#   1 — conflict needs operator
+#   2 — hard error
+
+migration_run "$PAIR"
+case "$?" in
+  0)
+    echo "  ✓ $PAIR applied"
+    ;;
+  1)
+    echo "  ⚠ $PAIR reported a conflict — pausing the chain."
+    echo "  Resolve manually, then resume with:"
+    echo "    APEXYARD_RESUME_FROM=$PAIR /update"
+    exit 1
+    ;;
+  2)
+    echo "  ✗ $PAIR exited with a hard error — aborting chain."
+    exit 2
+    ;;
+esac
+```
+
+#### After the chain (always)
+
+Whether the operator applied all, skipped some, or used `--skip-migrations`, write the anchor:
+
+```bash
+migration_write_anchor "$TARGET_VERSION"
+git add .claude/framework-version 2>/dev/null || true
+```
+
+Surfaces in the final-state report (step 9) as one line:
+
+```
+Framework version anchor advanced: <CURRENT> → <TARGET_VERSION>
+```
+
+If migrations were skipped, list them with the replay hint:
+
+```
+Skipped migrations (replay later with bash .claude/migrations/<pair>.sh):
+  - v1.1.0-to-v1.2.0
+  - v1.2.0-to-v1.3.0
+```
+
+### 8c. Topology drift detection (advisory, default-skip)
+
+When a project was instantiated with a topology bundle (via `/handover --topology <name>` or the step 1.5 pick), the project's `projects/<name>/.topology/VERSION` records the topology version at instantiation time. If the framework has since bumped the topology's `VERSION`, the adopter's instantiated bundle is drifting from the curated baseline.
+
+Walk the registry; for each project that has a `.topology/` anchor, compare versions:
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/_lib-read-config.sh"
+source "$(git rev-parse --show-toplevel)/.claude/hooks/_lib-portfolio-paths.sh"
+
+PROJECTS_DIR=$(portfolio_projects_dir)
+OPS_ROOT="$(git rev-parse --show-toplevel)"
+
+DRIFTED=()
+for proj in "$PROJECTS_DIR"/*/; do
+  [ -d "$proj" ] || continue
+  anchor="$proj/.topology"
+  [ -f "$anchor/name" ] || continue
+  [ -f "$anchor/VERSION" ] || continue
+
+  topology=$(cat "$anchor/name")
+  instantiated_ver=$(cat "$anchor/VERSION")
+  framework_ver=$(cat "$OPS_ROOT/topologies/$topology/VERSION" 2>/dev/null)
+
+  if [ -z "$framework_ver" ]; then
+    echo "⚠ $proj uses topology '$topology' but topologies/$topology/ is missing in this framework version."
+    continue
+  fi
+
+  if [ "$instantiated_ver" != "$framework_ver" ]; then
+    DRIFTED+=("$(basename "$proj")|$topology|$instantiated_ver|$framework_ver")
+  fi
+done
+```
+
+If `DRIFTED` is empty → skip this step entirely and continue to step 9.
+
+If non-empty, surface the drift with a y/n/d offer per project — same shape as the deprecated-config offer in step 8:
+
+```
+Topology drift detected — N projects are behind the framework's topology bundle:
+
+  - billing-api: topology=python-fastapi instantiated=1.0.0 → framework=1.1.0
+  - dashboard:   topology=typescript-nextjs instantiated=1.0.0 → framework=1.2.0
+
+Per-file diff acceptance — for each file in the topology, you'll see the
+diff and pick:
+
+  [Y] copy the framework version (overwrite the project's copy)
+  [n] keep the project's copy (skip this file)
+  [d] show the diff (then re-prompt)
+  [s] skip this project entirely (advance to next)
+
+Default per file is `n` (skip — operator owns the change).
+
+Re-instantiate now? [y/N/dry-run]
+```
+
+| Input | Effect |
+|-------|--------|
+| `y` | Walk each drifted project; for each file in `topologies/<name>/handbooks/**` + `topologies/<name>/golden-paths/**` + `topologies/<name>/templates/**`, prompt y/n/d; on `y` copy the framework version over the project copy; on `n` skip the file. After all files for a project are processed, update `projects/<proj>/.topology/VERSION` to the framework version. |
+| `N` / unrecognised | Skip this step entirely. Drift persists. Print: `Drift left in place. Re-run /update later or run /handover --topology <name> on the affected project to fully re-instantiate.` |
+| `dry-run` | Walk each drifted project; for each file, print the diff and what would be copied, but execute no writes. |
+
+#### Per-file prompt shape
+
+```
+Project: dashboard (typescript-nextjs 1.0.0 → 1.2.0)
+File:    handbooks/architecture/migration-safety.md
+
+[Y]es — copy framework version over project copy
+[n]o  — keep project copy as-is
+[d]iff — show the diff and re-prompt
+[s]kip — skip this project entirely (advance to next)
+
+[Y/n/d/s]
+```
+
+#### Why per-file (not bulk)
+
+The deciding factor is the same as step 8b: adopters routinely edit topology handbooks in their project (tightening the rule, adding domain-specific examples, opting in to blocking enforcement). A bulk replace would silently destroy those edits; per-file lets the operator preview and choose.
+
+#### Surfaces in the final-state report (step 9) as one line
+
+```
+Topology drift: <N projects drifted | skipped> ({…}, …)
+```
+
+This step **always** runs after step 8b. It does NOT block the sync — drift handling is purely additive and reversible (the operator can re-run `/update` later).
+
 ### 9. Final state + next steps
 
 On clean completion, print (substituting `$UPSTREAM_REF` for the literal `upstream/main` so the operator sees the actual ref synced under `--from-dev`):
@@ -660,6 +934,14 @@ Skill done. No remote state changed.
 | `--from-dev` passed but `upstream/dev` doesn't exist on the configured remote | Print: `upstream/dev not found — the configured upstream may not have a dev branch. Verify with: git ls-remote upstream dev`. Exit 1; no banner-suppression, no fallback to main. |
 | `--from-dev` combined with `--dry-run` | Banner prints first, then preview against `upstream/dev`, then exit 0. Same no-state-change semantics as plain `--dry-run`. |
 | `--from-dev` combined with `--rebase` | Allowed. Pre-release commits are rebased on top instead of merged; banner + branch convention unchanged. |
+| Anchor file missing AND `--from-version` not passed | Step 8b prompts interactively for the from-version (list built from `migration_known_versions`). Operator picks one or chooses skip / abort. |
+| Anchor file says `unknown` (malformed content) | Treated identically to missing — interactive prompt in step 8b. |
+| Chain has a missing link (release shipped without a migration script) | Refuse with a clear message naming the gap; advance the anchor anyway so subsequent runs don't loop on the same gap. This is a framework bug — file an issue. |
+| `--skip-migrations` passed | Chain detection runs (printed for visibility) but no `migration_run` invocations. Anchor still advances. |
+| Individual migration exits 1 (conflict) | Chain pauses. Anchor NOT advanced. Operator resolves, then re-runs `/update`. |
+| Individual migration exits 2 (hard error) | Chain aborts. Anchor NOT advanced. Print the script's stderr and exit 2. |
+| `--from-version` argument fails the semver regex | Refuse with `--from-version: expected vMAJOR.MINOR.PATCH (got 'X')`. Exit 1 before any fetch. |
+| `--from-dev` set | Migration chain auto-skipped (pre-release has no tag to anchor against). Anchor file not advanced — `--from-dev` is the only path that leaves the anchor untouched. |
 
 ## Design notes
 
@@ -697,6 +979,26 @@ The framework's adopter contract is "tagged releases from `upstream/main`" (rele
 
 Use cases that motivated the flag: the framework maintainer testing pre-release work on a separate machine before cutting a release tag; adopters validating an upcoming framework change before the wider rollout; CI workflows pinning to dev for integration testing (rare but legitimate).
 
+### Why a file-based version anchor (`.claude/framework-version`)
+
+The chain walker needs to know *which release this fork was last aligned with*. Three options were on the table — see [`AgDR-0032`](../../../docs/agdr/AgDR-0032-update-chain-migrations.md) for the full comparison:
+
+| Option | Why we didn't pick it |
+|--------|----------------------|
+| Derive from the most recent merge-from-upstream commit's tag | Fragile under squash-merge, rebase, and `/update --rebase`. Adopters routinely rewrite history; a derived signal would silently drift. |
+| `framework_version` key in `.claude/project-config.json` | Mixes a *measured* fact (which release am I on?) with *configured* facts (custom paths, feature toggles). Adopters edit project-config by hand; the anchor would drift on copy/paste. |
+| **Standalone file `.claude/framework-version` (CHOSEN)** | One line, one job: the version of the framework this fork last synced against. Easy to read, easy to write, robust to history rewrites. /update owns it. |
+
+### Why per-pair scripts, not one monolithic migration
+
+Each script is **bounded to one release transition**, which means:
+
+1. **Bisection works** — if the v1.3.0 step fails, the operator knows which fix to write without untangling four releases of changes.
+2. **Replay is meaningful** — `bash .claude/migrations/v1.2.0-to-v1.3.0.sh` is a complete, idempotent operation. Replaying a chain step from a monolithic script is much harder.
+3. **The chain shape stays in source-control history** — every release that ships either adds a real migration OR a no-op placeholder. A v1.5.0 adopter looking at `.claude/migrations/` sees an exhaustive list of "what changed for adopters at each release".
+
+The cost is **discipline at release-cut time**: skipping a release in the chain (forgetting to file the no-op placeholder) makes the chain refuse to walk past it. The `/release` skill's PR template includes a "did we add a migration script for this release?" checkbox to catch the omission.
+
 ## Cleanup (REQUIRED before exit)
 
 ```bash
@@ -708,5 +1010,13 @@ Always remove the bootstrap marker on a clean exit (after the sync branch is rea
 ## Related
 
 - `docs/multi-project.md` § "Upgrades — pulling from upstream" — the manual flow this skill automates.
+- `docs/upgrading.md` — adopter-facing reference for the multi-hop migration chain.
+- `docs/agdr/AgDR-0032-update-chain-migrations.md` — design rationale for the version anchor + per-pair migrations.
+- `.claude/hooks/_lib-migration-chain.sh` — the chain detection + run library.
+- `.claude/migrations/README.md` — convention for authoring a new per-version migration script.
 - `.claude/rules/pr-workflow.md` — the PR workflow the sync branch will follow.
 - `.claude/hooks/block-main-push.sh` — the hook that motivates the sync-branch approach.
+
+---
+
+*Part of [ApexYard](https://github.com/me2resh/apexyard) — multi-project SDLC framework for Claude Code · MIT.*

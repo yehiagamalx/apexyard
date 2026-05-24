@@ -1,6 +1,6 @@
 ---
 name: status
-description: Snapshot of the current project — git state, open PRs with CI, recent merges, in-progress issue. Multi-project aware. Use to orient yourself in a fresh session.
+description: Project snapshot — git state, open PRs + CI, recent merges, in-progress issue. Use `--briefing` for compact form.
 allowed-tools: Bash, Read, Grep, Glob
 ---
 
@@ -269,3 +269,7 @@ The shim walks up from `$PWD` looking for the apexyard fork root (`onboarding.ya
 - `/inbox` — what's waiting on you across projects
 - `/tasks` — actionable TODOs with URLs
 - `/projects` — portfolio table view
+
+---
+
+*Part of [ApexYard](https://github.com/me2resh/apexyard) — multi-project SDLC framework for Claude Code · MIT.*

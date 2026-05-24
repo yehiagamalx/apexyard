@@ -1,3 +1,5 @@
+<!-- Source: ApexYard · templates/custom-templates.README.example.md · github.com/me2resh/apexyard · MIT -->
+
 # Custom Templates
 
 This directory holds **adopter-authored overrides** for the framework's markdown templates. Overrides are **framework-wide** (not per-project) and **replace** the framework default in full (not additive).
@@ -11,7 +13,13 @@ Mirror the framework's `templates/<path>` shape. If you want to override `templa
 | `templates/prd.md` | `custom-templates/prd.md` |
 | `templates/agdr.md` | `custom-templates/agdr.md` |
 | `templates/agdr-migration.md` | `custom-templates/agdr-migration.md` |
-| `templates/spike.md` | `custom-templates/spike.md` |
+| `templates/tickets/feature.md` | `custom-templates/tickets/feature.md` |
+| `templates/tickets/bug.md` | `custom-templates/tickets/bug.md` |
+| `templates/tickets/task.md` | `custom-templates/tickets/task.md` |
+| `templates/tickets/migration.md` | `custom-templates/tickets/migration.md` |
+| `templates/tickets/idea.md` | `custom-templates/tickets/idea.md` |
+| `templates/tickets/spike.md` | `custom-templates/tickets/spike.md` |
+| `templates/tickets/investigation.md` | `custom-templates/tickets/investigation.md` |
 | `templates/architecture/c4-context.md` | `custom-templates/architecture/c4-context.md` |
 | `templates/architecture/c4-container.md` | `custom-templates/architecture/c4-container.md` |
 
@@ -21,7 +29,7 @@ An authored override **replaces** the framework default — partial overrides ar
 
 ## How resolution works
 
-Every template-consuming skill (`/decide`, `/write-spec`, `/c4`, `/migration`, `/spike`, `/handover`) routes through `portfolio_resolve_template` from `.claude/hooks/_lib-portfolio-paths.sh`:
+Every template-consuming skill (`/decide`, `/write-spec`, `/c4`, `/migration`, `/spike`, `/investigation`, `/feature`, `/bug`, `/task`, `/idea`, `/handover`) routes through `portfolio_resolve_template` from `.claude/hooks/_lib-portfolio-paths.sh`:
 
 1. If `<this_dir>/<path>` exists → use it.
 2. Else if `<ops_root>/templates/<path>` exists → use the framework default.

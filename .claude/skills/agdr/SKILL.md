@@ -1,6 +1,6 @@
 ---
 name: agdr
-description: Searchable, categorized library of Agent Decision Records (AgDRs) across the portfolio. Walks the registry, reads each project's docs/agdr/*.md (locally or via `gh api`), parses YAML frontmatter, and answers browse / search / show / stats queries. Use when you want to recall "have we decided this before?" without grepping every project.
+description: Browse / search / show / stats AgDRs across the portfolio — recalls "have we decided this before?".
 argument-hint: "[browse|search <term>|show <id>|stats] [--project <name>] [--category <cat>] [--no-cache]"
 allowed-tools: Bash, Read, Grep, Glob
 ---
@@ -324,3 +324,7 @@ The cache stores enough metadata for browse/stats but not full bodies — search
 - **Frontmatter migration helper** (`/agdr migrate`) — currently the skill prints "N AgDRs lack `category:`" and the operator edits manually; a guided migrator is a separate ticket
 - **Cross-AgDR linking** — "AgDR-0007 supersedes AgDR-0003" relationships aren't surfaced; the schema doesn't carry them yet
 - **Full-text relevance ranking** — current search is grep-style match presence, not BM25/TF-IDF; fine for portfolios in the hundreds, not thousands
+
+---
+
+*Part of [ApexYard](https://github.com/me2resh/apexyard) — multi-project SDLC framework for Claude Code · MIT.*
