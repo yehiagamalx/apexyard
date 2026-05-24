@@ -1,6 +1,6 @@
 ---
 name: idea
-description: Submit a new product idea, feature concept, or internal tool proposal to the ideas backlog. Use when capturing a new product concept that hasn't been triaged yet.
+description: Capture a new product idea / feature concept / internal tool proposal to the ideas backlog (pre-triage).
 argument-hint: "<short title of the idea>"
 allowed-tools: Bash, Read, Edit, Write
 ---
@@ -155,7 +155,19 @@ Would you like me to create a tracking GitHub Issue for IDEA-NNN? (y/n)
 
 If the user says no, skip this step entirely — the backlog entry is already saved, and that's enough.
 
-If yes, create one with the `enhancement` and `idea` labels (creating the labels if needed):
+If yes, resolve the idea body template via the portfolio helper so adopter overrides win when present:
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/_lib-read-config.sh"
+source "$(git rev-parse --show-toplevel)/.claude/hooks/_lib-portfolio-paths.sh"
+template=$(portfolio_resolve_template tickets/idea.md)   # → custom-templates/tickets/idea.md if present, else templates/tickets/idea.md
+```
+
+Single-fork adopters (no `portfolio` block) and adopters with no override fall straight through to `templates/tickets/idea.md`. Adopters who want a customised idea-tracking-issue shape drop their version at `<private_repo>/custom-templates/tickets/idea.md`. See `templates/README.md` for the path-mirroring convention.
+
+**Backward-compat fallback**: if `portfolio_resolve_template` returns empty (template file missing — partial adopter setup), fall back to the inline heredoc body below and print a one-line WARN on stderr (`WARN: tickets/idea.md template missing — using inline fallback`).
+
+Substitute the gathered values into the resolved template (or the fallback heredoc below), then create with the `enhancement` and `idea` labels (creating the labels if needed):
 
 ```bash
 gh issue create \
@@ -175,6 +187,11 @@ IDEA-NNN — see backlog file.
 
 ## Next Step
 Triage. Decide whether to spec, schedule, or close.
+
+## Glossary
+| Term | Definition |
+|------|------------|
+| {term} | {definition} |
 EOF
 )" \
   --label "idea,needs-triage"
@@ -249,3 +266,7 @@ Next: triage with the team, then `/write-spec` if it survives.
 | SHIPPED | Built and released |
 | WONTDO | Triaged out — not pursuing |
 | SUPERSEDED | Replaced by a different idea |
+
+---
+
+*Part of [ApexYard](https://github.com/me2resh/apexyard) — multi-project SDLC framework for Claude Code · MIT.*

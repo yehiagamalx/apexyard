@@ -114,18 +114,34 @@ run_migration() {
 
     SIBLING_ROOT=$(dirname "$(jq -r '.portfolio.registry' .claude/project-config.json)")
 
-    # Move onboarding.yaml
+    # Copy onboarding.yaml (NOT move — see AgDR-0021 § H).
+    # Sibling becomes canonical; public-fork copy is untracked and left on
+    # disk as a legacy ops-root walk-up fallback / safety-net snapshot.
     if [ -f onboarding.yaml ] && [ ! -f "$SIBLING_ROOT/onboarding.yaml" ]; then
-      mv onboarding.yaml "$SIBLING_ROOT/onboarding.yaml"
+      cp -p onboarding.yaml "$SIBLING_ROOT/onboarding.yaml"
+      git rm --cached onboarding.yaml >/dev/null 2>&1 || true
+    elif [ -f "$SIBLING_ROOT/onboarding.yaml" ] && [ -f onboarding.yaml ]; then
+      # Idempotence: sibling is canonical, just ensure public-fork copy is untracked.
+      git rm --cached onboarding.yaml >/dev/null 2>&1 || true
     fi
 
-    # Move workspace contents
+    # Move workspace contents — mirrors the live recipe in
+    # .claude/skills/update/SKILL.md Step 8a (lines ~540-557).
+    # Two edge cases the live recipe handles + this test now exercises:
+    #   1. workspace/README.md is a framework artefact — stays in the
+    #      public fork (per AgDR-0021 § G).
+    #   2. If a project already exists in the sibling, skip + WARN —
+    #      don't overwrite. Print to stderr so the operator sees it.
     if [ -d workspace ] && [ "$(ls -A workspace 2>/dev/null)" ]; then
       mkdir -p "$SIBLING_ROOT/workspace"
       for entry in workspace/*; do
         [ -e "$entry" ] || continue
         name=$(basename "$entry")
-        if [ -e "$SIBLING_ROOT/workspace/$name" ]; then continue; fi
+        if [ "$name" = "README.md" ]; then continue; fi
+        if [ -e "$SIBLING_ROOT/workspace/$name" ]; then
+          echo "WARNING: workspace/$name exists in BOTH locations — skipped." >&2
+          continue
+        fi
         mv "$entry" "$SIBLING_ROOT/workspace/$name"
       done
     fi
@@ -176,13 +192,33 @@ fi
 run_migration "$SB/public"
 
 # Post-checks
-[ ! -f "$SB/public/onboarding.yaml" ] \
-  && mark_pass "onboarding.yaml moved out of public fork" \
-  || mark_fail "onboarding moved" "still present in public fork"
+#
+# onboarding.yaml: COPY semantics (refined #317, see AgDR-0021 § H).
+# Both copies exist, contents are identical, and the public-fork copy
+# is untracked (git rm --cached'd) so it can't drift into commits.
+[ -f "$SB/public/onboarding.yaml" ] \
+  && mark_pass "onboarding.yaml snapshot retained in public fork (copy semantics)" \
+  || mark_fail "onboarding snapshot retained" "missing from public fork"
 
 [ -f "$SB/private/onboarding.yaml" ] \
-  && mark_pass "onboarding.yaml landed in sibling private repo" \
+  && mark_pass "onboarding.yaml landed in sibling private repo (canonical)" \
   || mark_fail "onboarding landed" "missing in sibling repo"
+
+if [ -f "$SB/public/onboarding.yaml" ] && [ -f "$SB/private/onboarding.yaml" ]; then
+  if cmp -s "$SB/public/onboarding.yaml" "$SB/private/onboarding.yaml"; then
+    mark_pass "onboarding.yaml: public-fork snapshot matches sibling-repo canonical"
+  else
+    mark_fail "onboarding identical" "public-fork and sibling-repo copies differ"
+  fi
+fi
+
+# The public-fork copy must be UNTRACKED so future commits don't ship it.
+# `git ls-files` lists tracked paths only — empty output means untracked.
+if [ -z "$( cd "$SB/public" && git ls-files onboarding.yaml 2>/dev/null )" ]; then
+  mark_pass "onboarding.yaml untracked in public fork (git rm --cached applied)"
+else
+  mark_fail "onboarding untracked" "still tracked in public fork"
+fi
 
 [ ! -d "$SB/public/workspace/demo" ] \
   && mark_pass "workspace/demo moved out of public fork" \
@@ -284,6 +320,159 @@ else
   mark_fail "post-v2 ops_root" "see error above"
 fi
 
+rm -rf "$SB"
+
+# ---------------------------------------------------------------------------
+# Case 4: onboarding.yaml is COPIED (not moved) — explicit semantics check
+#
+# Refined in #317 (see AgDR-0021 § H): the public-fork onboarding.yaml is
+# left on disk as an untracked gitignored snapshot so the legacy ops-root
+# walk-up fallback (_lib-ops-root.sh) keeps working even if .apexyard-fork
+# is accidentally removed. The sibling-repo copy is canonical.
+#
+# This case modifies the public-fork copy AFTER migration and asserts the
+# sibling-repo copy is NOT affected — proves the two are independent files
+# (a `mv` followed by `cp` to recreate would have the same observable
+# pre-state but reading would still be a single canonical copy; this test
+# specifically pins that we have two real files on disk).
+# ---------------------------------------------------------------------------
+SB=$(mktemp -d)
+SB=$(cd "$SB" && pwd -P)
+build_pre_v2 "$SB"
+
+# Capture pre-migration content for comparison
+ORIG_CONTENT=$(cat "$SB/public/onboarding.yaml")
+
+run_migration "$SB/public"
+
+# Sanity: both files exist after migration
+if [ ! -f "$SB/public/onboarding.yaml" ] || [ ! -f "$SB/private/onboarding.yaml" ]; then
+  mark_fail "case-4 sanity" "expected both copies of onboarding.yaml post-migration"
+else
+  # Modify the public-fork snapshot
+  echo "# touched by case 4" >> "$SB/public/onboarding.yaml"
+
+  # The sibling-repo copy must be untouched (independent file, not a hard link)
+  SIB_CONTENT=$(cat "$SB/private/onboarding.yaml")
+  if [ "$SIB_CONTENT" = "$ORIG_CONTENT" ]; then
+    mark_pass "copy-not-move: sibling-repo onboarding.yaml unaffected by public-fork edits"
+  else
+    mark_fail "copy semantics" "sibling-repo copy changed when public-fork copy was edited (hard link or move-with-symlink?)"
+  fi
+
+  # And both must be on disk simultaneously (the load-bearing semantic of copy vs move)
+  if [ -f "$SB/public/onboarding.yaml" ] && [ -f "$SB/private/onboarding.yaml" ]; then
+    mark_pass "copy-not-move: both public-fork and sibling-repo onboarding.yaml exist after migration"
+  else
+    mark_fail "both copies exist" "one of the copies is missing"
+  fi
+
+  # And the public-fork .gitignore must list onboarding.yaml so the snapshot can't drift back into commits
+  if grep -qxF onboarding.yaml "$SB/public/.gitignore"; then
+    mark_pass "copy-not-move: public-fork .gitignore lists onboarding.yaml (snapshot can't drift into commits)"
+  else
+    mark_fail "gitignore guards snapshot" "onboarding.yaml not in public-fork .gitignore"
+  fi
+fi
+
+rm -rf "$SB"
+
+# ---------------------------------------------------------------------------
+# Case 5: multi-project workspace + conflict-skip + README preservation.
+#
+# Exercises the two `run_migration()` edge cases #320 names:
+#   1. Multi-project loop — alpha + beta + gamma all present in the public
+#      fork's workspace/.
+#   2. Conflict-skip — beta also pre-exists in the sibling's workspace.
+#      The migration must SKIP it (don't overwrite) and print a WARNING.
+#   3. README preservation — workspace/README.md is the framework artefact
+#      explaining the convention (AgDR-0021 § G). Must stay in the public
+#      fork during migration, not move with the project clones.
+# ---------------------------------------------------------------------------
+echo "== Case 5: multi-project workspace + conflict-skip + README preservation"
+SB=$(mktemp -d)
+SB=$(cd "$SB" && pwd -P)
+build_pre_v2 "$SB"
+
+# Extend the public fork's workspace with 2 more projects + the framework's
+# README.md artefact. build_pre_v2 already created workspace/demo; reuse it
+# as one of the three projects + add alpha and gamma alongside, then drop
+# the README.md framework artefact in the same dir.
+mkdir -p "$SB/public/workspace/alpha" "$SB/public/workspace/gamma"
+echo "alpha workspace content" > "$SB/public/workspace/alpha/README.md"
+echo "gamma workspace content" > "$SB/public/workspace/gamma/README.md"
+cat > "$SB/public/workspace/README.md" <<'README'
+# workspace/ — live working copies of managed projects
+
+This directory holds `git clone`d managed-project repos. Each subdirectory
+is its own git tree (their own remote, their own branches). This README
+is the framework artefact — it stays in the public fork across the v1→v2
+migration per AgDR-0021 § G.
+README
+
+# Pre-create one of the three project dirs in the sibling — this is the
+# conflict-skip path: build_pre_v2 named the registered project "demo",
+# so we pre-create "demo" in the sibling (it'll trigger the skip).
+mkdir -p "$SB/private/workspace/demo"
+echo "PRE-EXISTING sibling content for demo — do NOT overwrite" > "$SB/private/workspace/demo/README.md"
+
+# Run the migration and capture stderr for the WARNING assertion
+STDERR_OUT=$(mktemp)
+run_migration "$SB/public" 2>"$STDERR_OUT"
+RC=$?
+
+# Assertion 1: migration didn't abort despite the conflict (RC=0)
+if [ "$RC" = "0" ]; then
+  mark_pass "multi-project: migration RC=0 despite conflict (didn't abort on skip)"
+else
+  mark_fail "multi-project: migration RC=$RC" "expected 0; conflict-skip path should continue, not abort"
+fi
+
+# Assertion 2: alpha moved to sibling
+if [ -d "$SB/private/workspace/alpha" ] && [ -f "$SB/private/workspace/alpha/README.md" ]; then
+  mark_pass "multi-project: alpha moved to sibling"
+else
+  mark_fail "multi-project: alpha moved" "expected $SB/private/workspace/alpha/ with content"
+fi
+
+# Assertion 3: gamma moved to sibling (proves the loop continued PAST the conflict on demo)
+if [ -d "$SB/private/workspace/gamma" ] && [ -f "$SB/private/workspace/gamma/README.md" ]; then
+  mark_pass "multi-project: gamma moved to sibling (loop didn't abort on demo conflict)"
+else
+  mark_fail "multi-project: gamma moved" "expected $SB/private/workspace/gamma/ — the loop must continue past the conflict-skip"
+fi
+
+# Assertion 4: pre-existing demo in sibling NOT overwritten
+demo_content=$(cat "$SB/private/workspace/demo/README.md" 2>/dev/null)
+if echo "$demo_content" | grep -q "PRE-EXISTING"; then
+  mark_pass "multi-project: pre-existing demo preserved in sibling (not overwritten)"
+else
+  mark_fail "multi-project: demo preserved" "sibling demo content was overwritten: '$demo_content'"
+fi
+
+# Assertion 5: WARNING printed to stderr in the EXACT format SKILL.md line 553
+# prescribes — including the "— skipped." tail (catches tail-drift regressions).
+if grep -qE "^WARNING: workspace/demo exists in BOTH locations — skipped\.$" "$STDERR_OUT"; then
+  mark_pass "multi-project: conflict-skip WARNING printed to stderr (full SKILL.md format)"
+else
+  mark_fail "multi-project: WARNING printed" "stderr did not include the expected full WARNING line — got: $(cat "$STDERR_OUT" 2>/dev/null)"
+fi
+
+# Assertion 6: workspace/README.md stayed in the public fork (framework artefact)
+if [ -f "$SB/public/workspace/README.md" ]; then
+  mark_pass "multi-project: workspace/README.md preserved in public fork (framework artefact)"
+else
+  mark_fail "multi-project: README preserved" "expected $SB/public/workspace/README.md — framework artefact must stay per AgDR-0021 § G"
+fi
+
+# Assertion 7: workspace/README.md was NOT also moved to sibling
+if [ ! -f "$SB/private/workspace/README.md" ]; then
+  mark_pass "multi-project: workspace/README.md was NOT moved to sibling (framework artefact stays)"
+else
+  mark_fail "multi-project: README not in sibling" "$SB/private/workspace/README.md exists — should never have moved"
+fi
+
+rm -f "$STDERR_OUT"
 rm -rf "$SB"
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 ---
 name: setup
-description: First-run framework bootstrap for a new ApexYard fork. Three exchanges — "describe your stack", "here are the defaults", "accept or customize?" — and the fork is configured. Run once after forking; re-run anytime to update.
+description: First-run framework bootstrap — 3 exchanges (describe stack → defaults → accept/customize) and the fork is configured.
 disable-model-invocation: false
 argument-hint: "[--reset] [--enable-lsp]"
 effort: medium
@@ -29,6 +29,33 @@ The `onboarding-check.sh` SessionStart hook detects that `onboarding.yaml` still
 Re-running `/setup` on an already-configured fork shows the current config and asks what to update. Use `--reset` to clear everything and start from scratch.
 
 ## Process
+
+> **Tip for the agent driving setup**: `docs/multi-project.md` is the canonical reference for portfolio modes, v1→v2 migration, custom-templates path-mirroring, the FAQ, and trade-offs. As of #372 it is **not** auto-imported into the session context (the 70k-char file was loading ~18k tokens into every session, even for adopters who never re-run setup). The steps below are self-contained for the mechanical setup. If a first-timer asks a question mid-setup that this SKILL doesn't answer directly, `Read docs/multi-project.md` on demand rather than guessing.
+
+### Step −1: Pre-flight — refuse if `jq` is missing (REQUIRED)
+
+`/setup` (and every framework hook that reads `.claude/project-config.json` overrides) depends on `jq`. Without it, override reads silently fall back to defaults — the adopter's `.ui_paths`, `.tracker.*`, `.migration_paths`, etc. have zero effect and there's no error to debug. Refuse to proceed until jq is on PATH so the operator never sees the silently-degraded state.
+
+Run this **before any other tool call** in the skill:
+
+```bash
+if ! command -v jq >/dev/null 2>&1; then
+  cat <<'MSG'
+✗ ApexYard requires `jq` for reading project-config overrides, but it's not installed.
+
+Install instructions:
+  macOS:   brew install jq
+  Debian:  apt-get install jq
+  Fedora:  dnf install jq
+  Other:   https://jqlang.org/download/
+
+Once installed, re-run /setup.
+MSG
+  exit 1
+fi
+```
+
+The sibling `check-jq-installed.sh` SessionStart hook surfaces the same gap as a one-line banner outside `/setup` so a fork that's already configured (and never re-runs `/setup`) still sees the warning. See AgDR-0038 for the design rationale.
 
 ### Step 0: Mark this session as bootstrap (REQUIRED)
 
@@ -114,6 +141,7 @@ The full setup lives in `docs/multi-project.md` § "Split-portfolio mode — pub
    - **`onboarding.yaml`** seeded from the framework template — split-portfolio v2 (#242) moves company/team/stack config to the private repo too, so the public fork stays slim
    - empty **`custom-skills/`** dir + a one-paragraph `custom-skills/README.md` explaining the convention. Company-specific proprietary skills (`/file-internal-bug`, `/check-policy`, etc.) live as `custom-skills/<name>/SKILL.md` here; the public fork's `link-custom-skills.sh` SessionStart hook symlinks each into `.claude/skills/<name>/` so Claude Code discovers them. Custom skill names override framework skills of the same name (warning printed at SessionStart). See `docs/multi-project.md` § "Private custom skills + handbooks" for the full convention. (Added in #243.)
    - empty **`custom-handbooks/`** dir + a one-paragraph `custom-handbooks/README.md` explaining the convention. Company-confidential coding standards live as `custom-handbooks/{architecture,general,language/<lang>}/*.md` here, mirroring the public `handbooks/` path-convention. Rex consumes both layers during code review (advisory by default, blocking with `ENFORCEMENT: blocking` at the top of the file). See `handbooks/README.md` for the format. (Added in #243.)
+   - **`agent-routing.yaml`** seeded from `<fork>/agent-routing.yaml.example` (the framework's worked-examples file). This is the adopter-routing source-of-truth for split-portfolio mode — every adopter override (per-agent model, endpoint, env, timeout) lives here. The seeded file starts as the framework example so adopters see a working shape; the empty `agents: {}` block at the top means zero overrides until edited. The SessionStart sync hook (`apply-agent-routing.sh`, #357) reads it on every session start. See `docs/multi-project.md` § "Centralised agent routing — `agent-routing.yaml`" for the schema. (Added in #351 PR 3.)
    - `.gitignore` with `workspace/*/` so the inner clones don't get double-tracked in the private repo either
    - initial commit + push
 6. **Configure path resolution in the fork** (recommended — v2 config-block mode):
@@ -130,12 +158,13 @@ The full setup lives in `docs/multi-project.md` § "Split-portfolio mode — pub
          "onboarding": "../apexyard-portfolio/onboarding.yaml",
          "workspace_dir": "../apexyard-portfolio/workspace",
          "custom_skills_dir": "../apexyard-portfolio/custom-skills",
-         "custom_handbooks_dir": "../apexyard-portfolio/custom-handbooks"
+         "custom_handbooks_dir": "../apexyard-portfolio/custom-handbooks",
+         "agent_routing": "../apexyard-portfolio/agent-routing.yaml"
        }
      }
      ```
 
-     The two `custom_*_dir` keys are optional — defaults match `./custom-skills` and `./custom-handbooks` resolved against the ops-fork root. Setting them explicitly here is the v2 split-portfolio shape and matches what step 5 just created in the private repo.
+     The two `custom_*_dir` keys are optional — defaults match `./custom-skills` and `./custom-handbooks` resolved against the ops-fork root. The `agent_routing` key is similarly optional — its default resolves to `./agent-routing.yaml` against the ops-fork root, so single-fork adopters who keep the file at the fork root don't need to set it explicitly. Setting all three explicitly here is the v2 split-portfolio shape and matches what step 5 just created in the private repo.
 
    - **Write the `.apexyard-fork` marker** at the public-fork root. This is the v2 ops-fork anchor — `_lib-ops-root.sh` and every hook that walks up to find the ops fork looks for this marker first (with the legacy `onboarding.yaml + apexyard.projects.yaml` pair as fallback). **Spec: presence-only — readers MUST ignore content; only file presence matters.** Writers MAY include a single explanatory line so `head .apexyard-fork` is informative for operators encountering it the first time. See [AgDR-0021](../../../docs/agdr/AgDR-0021-split-portfolio-v2-path-resolution.md) § B for the rationale.
 
@@ -546,6 +575,28 @@ I'll need: repo name (owner/repo) and a short project name.
 If yes → append to `apexyard.projects.yaml`, stage alongside `onboarding.yaml`.
 If no → skip. They can add projects later with `/handover`.
 
+### Step 7a: Single-fork agent-routing seeding (advisory)
+
+For **single-fork mode** only — split-portfolio adopters already got `agent-routing.yaml` seeded into the private repo in Step 5.
+
+The framework ships `<fork>/agent-routing.yaml.example` as the worked-examples file, and `.gitignore` already has `/agent-routing.yaml` excluded so adopters can edit locally without leaking overrides to the public fork. By default `/setup` does NOT auto-copy the example to `agent-routing.yaml` — single-fork adopters' overrides shouldn't accumulate before they've made any. Mention the path explicitly so the operator knows where to start when they want to customise:
+
+```
+Agent routing (model + endpoint per agent) is in agent-routing.yaml at the
+fork root. The framework ships `agent-routing.yaml.example` as a template;
+`.gitignore` already excludes the working `agent-routing.yaml` file so
+your overrides never leak to the public fork. When you're ready to
+customise, run:
+
+  cp agent-routing.yaml.example agent-routing.yaml
+  $EDITOR agent-routing.yaml
+
+The SessionStart sync hook (apply-agent-routing.sh) reads it on every
+session start. See docs/multi-project.md § "Centralised agent routing".
+```
+
+No file writes here — purely informational. Added in #351 PR 3.
+
 ### Step 8: Clear the bootstrap marker (REQUIRED)
 
 ```bash
@@ -564,3 +615,7 @@ Always remove the marker on a clean exit so subsequent edits in the same session
 6. **No project-config.json.** `/setup` configures the FRAMEWORK (onboarding.yaml). Per-project config is handled by `/handover` and `/idea` when projects enter the portfolio.
 7. **Never auto-install language runtimes.** Step 2c installs LSP servers (e.g. `typescript-language-server`, `pyright`, `gopls`, `rust-analyzer`) but never the underlying runtime (`node`, `python`, `go`, `rustup`). If a runtime is missing, refuse the LSP install gracefully and tell the operator what to install.
 8. **Print plugin-install commands; never invoke them.** The Claude Code plugin marketplace command shape (`/plugin marketplace add`, `/plugin install`, `/reload-plugins`) is empirically stable — Step 2c.5(d) prints a copy-paste block for the operator. But `/plugin` is a Claude Code UI built-in, not a shell command, so the skill never runs the commands itself — it prints them. Always emit the `marketplace add` line; it's idempotent and recovers the case where the docs' auto-load claim doesn't fire on a fresh install.
+
+---
+
+*Part of [ApexYard](https://github.com/me2resh/apexyard) — multi-project SDLC framework for Claude Code · MIT.*

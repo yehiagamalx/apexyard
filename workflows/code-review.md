@@ -46,6 +46,8 @@ Fixes #[ticket-id]
 | [Term] | [What it means in this context] |
 ```
 
+**Summary bullets must be narrative, not label-only.** Every bullet should answer *what changed* AND *why it matters to the person reading this*. Label-only bullets ("State fix", "CI pipeline changes") force reviewers into diff archaeology and waste their judgment time. See [`.claude/rules/pr-quality.md`](../.claude/rules/pr-quality.md) § "Summary bullets — narrative quality" for the rule, a worked bad/good pair, and the legitimate-exceptions list. Rex flags label-only bullets as an advisory finding (`nit:` / `suggestion:`, non-blocking).
+
 **Why a Glossary?** Every PR is a learning opportunity. Explaining concepts helps:
 
 - Junior devs learn from senior work
@@ -189,3 +191,7 @@ Track these to improve:
 - Review time (aim for < 24h)
 - Review cycles (aim for < 3)
 - Post-merge bugs (aim for < 5%)
+
+---
+
+*Part of [ApexYard](https://github.com/me2resh/apexyard) — multi-project SDLC framework for Claude Code · MIT.*

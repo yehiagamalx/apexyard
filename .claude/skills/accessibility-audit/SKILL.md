@@ -1,6 +1,6 @@
 ---
 name: accessibility-audit
-description: Comprehensive WCAG 2.1 AA accessibility audit — checks perceivable, operable, understandable, and robust criteria across the codebase. Deep-dive companion to /launch-check's accessibility dimension.
+description: WCAG 2.1 AA audit — perceivable, operable, understandable, robust criteria. Deep-dive for /launch-check accessibility.
 disable-model-invocation: false
 argument-hint: "[project-path]"
 effort: high
@@ -114,3 +114,7 @@ touch projects/<name>/audits/accessibility-audit/.audit-history-tracked
 4. **Give copy-pasteable fixes** where possible (the exact HTML/JSX to add, not just "fix the contrast").
 5. **Always persist via the lib.** The persist step runs regardless of opt-in commit state.
 6. **Severity vocabulary in the JSON is lowercase.** The lib expects `critical`/`high`/`medium`/`low`/`info`. The visible findings table can keep its conventional capitalisation.
+
+---
+
+*Part of [ApexYard](https://github.com/me2resh/apexyard) — multi-project SDLC framework for Claude Code · MIT.*

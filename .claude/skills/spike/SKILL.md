@@ -1,6 +1,6 @@
 ---
 name: spike
-description: Create a hypothesis-driven, time-boxed, throw-away spike ticket — covers POC, prototype, experiment, and exploration work. Drops the user-story / acceptance-criteria fields; adds Hypothesis, Budget, Kill Criteria, and Disposition. Spike PRs are exempt from the AgDR + 80% coverage gates; code review (Rex) and the security auditor still apply.
+description: Create a hypothesis-driven, time-boxed spike ticket (Hypothesis/Budget/Kill Criteria/Disposition). Exempt from AgDR + coverage gates.
 argument-hint: "<short title of the spike>"
 allowed-tools: Bash, Read, Write
 ---
@@ -151,12 +151,14 @@ Resolve the spike body template via the portfolio helper so adopter overrides wi
 ```bash
 source "$(git rev-parse --show-toplevel)/.claude/hooks/_lib-read-config.sh"
 source "$(git rev-parse --show-toplevel)/.claude/hooks/_lib-portfolio-paths.sh"
-template=$(portfolio_resolve_template spike.md)   # → custom-templates/spike.md if present, else templates/spike.md
+template=$(portfolio_resolve_template tickets/spike.md)   # → custom-templates/tickets/spike.md if present, else templates/tickets/spike.md
 ```
 
-Single-fork adopters (no `portfolio` block) and adopters with no override fall straight through to `templates/spike.md`. Adopters who want a customised spike-body shape drop their version at `<private_repo>/custom-templates/spike.md`. See `templates/README.md` for the path-mirroring convention.
+Single-fork adopters (no `portfolio` block) and adopters with no override fall straight through to `templates/tickets/spike.md`. Adopters who want a customised spike-body shape drop their version at `<private_repo>/custom-templates/tickets/spike.md`. See `templates/README.md` for the path-mirroring convention.
 
-Display the full ticket using the resolved template's section headings (the default `templates/spike.md` shape is reproduced below):
+**Backward-compat fallback**: if `portfolio_resolve_template` returns empty (template file missing — partial adopter setup or pre-#281 layout where the file lived at `templates/spike.md`), fall back to the inline heredoc body below and print a one-line WARN on stderr (`WARN: tickets/spike.md template missing — using inline fallback`).
+
+Display the full ticket using the resolved template's section headings (the default `templates/tickets/spike.md` shape is reproduced below):
 
 ```
 Here's the ticket I'll create:
@@ -258,3 +260,7 @@ A spike PR is exempt from the production SDLC subset listed below; everything el
 | Disposition decision before close | N/A | Required — operator must declare PROMOTE or DISCARD via `/spike-close` |
 
 See `.claude/rules/workflow-gates.md` § Spike work for the rule statement, and AgDR-NNNN-spike-skill-schema-and-exemptions.md for the rationale.
+
+---
+
+*Part of [ApexYard](https://github.com/me2resh/apexyard) — multi-project SDLC framework for Claude Code · MIT.*

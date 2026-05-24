@@ -1,6 +1,6 @@
 ---
 name: seo-audit
-description: Technical SEO audit — meta tags, Open Graph, sitemap, robots.txt, structured data, mobile-friendliness, Core Web Vitals readiness. Deep-dive companion to /launch-check's SEO dimension.
+description: Technical SEO audit — meta, OG, sitemap, robots.txt, structured data, mobile, CWV readiness. Deep-dive for /launch-check SEO.
 disable-model-invocation: false
 argument-hint: "[project-path]"
 effort: medium
@@ -9,6 +9,8 @@ effort: medium
 # /seo-audit — Technical SEO Analysis
 
 Deep-dive SEO audit against Google's best practices. Checks on-page SEO, technical SEO, and social sharing metadata. Invoke when `/launch-check`'s SEO row shows WARN or FAIL.
+
+> **See also**: `/geo-audit` for the LLM/agent-discoverability sibling check — `llms.txt`, `AGENTS.md`, AI-crawler directives in `robots.txt`, JSON-LD citation metadata, token economics. `/seo-audit` covers the Googlebot audience; `/geo-audit` covers the LLM-crawler and coding-agent audience. The two run independently; `/launch-check` fans out to both at milestone boundaries.
 
 ## Process
 
@@ -117,3 +119,7 @@ touch projects/<name>/audits/seo-audit/.audit-history-tracked
 4. **Prioritize by indexing impact.** Missing sitemap > missing og:image > missing structured data.
 5. **Always persist via the lib.** The persist step runs regardless of opt-in commit state.
 6. **Severity vocabulary in the JSON is lowercase.** The lib expects `critical`/`high`/`medium`/`low`/`info`.
+
+---
+
+*Part of [ApexYard](https://github.com/me2resh/apexyard) — multi-project SDLC framework for Claude Code · MIT.*

@@ -1,6 +1,6 @@
 ---
 name: compliance-check
-description: GDPR and ePrivacy compliance audit — cookie consent, privacy policy, data handling, right to deletion, data processing agreements. Deep-dive companion to /launch-check's compliance dimension.
+description: GDPR + ePrivacy audit — consent, privacy policy, data handling, right-to-deletion, DPAs. Deep-dive for /launch-check compliance.
 disable-model-invocation: false
 argument-hint: "[project-path]"
 effort: high
@@ -152,3 +152,7 @@ The MD artefacts are committed regardless; the marker controls whether the per-r
 4. **Check third-party SDKs.** Analytics, error tracking, and ad SDKs often set cookies and process data — they need consent too.
 5. **Always persist via the lib.** The persist step runs regardless of opt-in commit state. The marker only controls whether the JSON is committed.
 6. **Severity vocabulary in the JSON is lowercase.** The lib's `stats.by_severity` derivation expects `critical`/`high`/`medium`/`low`/`info`. The human-readable findings table can use whatever capitalisation reads best.
+
+---
+
+*Part of [ApexYard](https://github.com/me2resh/apexyard) — multi-project SDLC framework for Claude Code · MIT.*

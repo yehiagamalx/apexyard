@@ -1,6 +1,6 @@
 ---
 name: dfd
-description: Extract a Data Flow Diagram from a codebase (single-service or multi-repo system) with trust boundaries and data classifications. Writes Mermaid markdown (renders on GitHub) as the canonical source; OWASP Threat Dragon v2 JSON on `--format=dragon`. Becomes the source of truth that `/threat-model` and `/compliance-check` consume.
+description: DFD with trust boundaries + data classifications (Mermaid + optional Threat Dragon JSON). Source-of-truth for /threat-model.
 argument-hint: "[project-name | . | --scope-all] [--format=mermaid|dragon|all]"
 allowed-tools: Bash, Read, Grep, Glob, Write
 ---
@@ -330,3 +330,7 @@ Run `/dfd billing-api` against a small Express + Prisma + BullMQ service that in
 - **Don't run `/dfd --scope-all` on every PR.** It's a one-off baseline + on-significant-change refresh. Single-service `/dfd` is the per-PR cadence.
 - **Don't classify by guessing.** If neither the annotation, env-var, schema, nor explicit-registry pathways fire on a field, leave it unclassified and surface in coverage gaps. False classifications are worse than missing ones (they create false confidence in compliance output).
 - **Don't skip the operator review step.** Heuristic discovery has false positives; the operator's "yes, those are real boundaries; no, that field is not PII" pass is load-bearing for downstream consumers.
+
+---
+
+*Part of [ApexYard](https://github.com/me2resh/apexyard) — multi-project SDLC framework for Claude Code · MIT.*

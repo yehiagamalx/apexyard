@@ -17,6 +17,7 @@ Version follows semantic versioning (`MAJOR.MINOR.PATCH`):
 | Breaking change, removes existing behaviour | MAJOR (1.2.0 → 2.0.0) |
 
 Update in **two places** in the main plugin `.php` file:
+
 ```php
  * Version:     X.Y.Z          ← plugin header comment (~line 5)
 define( 'PLUGIN_VERSION', 'X.Y.Z' );  ← version constant (~line 14)

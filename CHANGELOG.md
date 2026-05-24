@@ -2,127 +2,106 @@
 
 All notable changes to ApexYard are documented here.
 
+## [2.0.1] — 2026-05-24
+
+### Mobile UX hotfix for the v2.0.0 marketing site
+
+Patch-only release fixing 7 mobile UX regressions surfaced after v2.0.0 shipped. No framework changes — site-only.
+
+### Fixed
+
+- `fix(#393)` **Main-page nav restored on mobile** — `architecture`, `skills`, and `how it works` links were hidden by the `<700px` collapse rule on all 4 site pages. Added `class="always"` so they stay visible. Mobile readers can move between sections again.
+- `fix(#393)` **Eyebrow row wraps cleanly** — the "Copy as Markdown for AI" button no longer crowds the pill+subtitle row at narrow widths. Drops to its own line below the eyebrow on mobile.
+- `fix(#393)` **Duplicated lead text hidden from sighted users on `/how-it-works`** — the `#ai-lead` block (added in v2.0.0 to satisfy `/geo-audit` G12) is now visually-hidden via clip+position trick. AI crawlers and screen readers still consume it; sighted users no longer see the same prose twice.
+- `fix(#393)` **Homepage hero polish** — "Built by me2resh" moved from between tagline and subhead to below the CTAs; version line dimmed further (14px→13px, opacity 0.7→0.55); hero inline link shortened and `white-space:nowrap` so it doesn't wrap mid-phrase.
+- `fix(#393)` **Subtitles trimmed on `/architecture` and `/skills`** so they don't wrap awkwardly on mobile.
+
+### Compatibility
+
+No breaking changes. No framework code touched. Adopters see no changes to hooks, skills, rules, agents, templates, or workflows — only `site/` files were modified.
+
+## [2.0.0] — 2026-05-24
+
+### Six new skills, agent runtime overhaul, marketing site repositioned
+
+v2.0.0 adds six slash commands (planning, audit, PDF, handbook-feedback), ships per-agent model routing via `agent-routing.yaml`, introduces class-aware role activation (spawn vs in-thread), and renames the security-reviewer agent (Hatim → Hakim). The marketing site is repositioned for the founder audience.
+
+**6 new skills (54 total) · 5 adopter-friction fixes · 1 breaking change.**
+
+### Highlights
+
+- **`/plan-initiative`** — interview-driven decomposition into milestones + tasks, dependency-aware sequencing, optional bulk-file each milestone as a Feature ticket with cross-refs
+- **`/mutation-test`** — mutation-testing sensor (Stryker / MutPy / go-mutesting / mutant); milestone cadence, graceful degrade if no language tool installed
+- **`/geo-audit`** — LLM- and agent-discoverability audit; 17 checks across discovery, capability-signaling, content-format, token economics (sibling to `/seo-audit`)
+- **`/codify-rule`** — turn a code-review comment that caught a Rex-miss into a draft handbook entry, auto-routed by domain bucket
+- **`/feature-diagram`** — per-feature Mermaid flowchart of routes / models / jobs / screens (consumes `/extract-features` inventory)
+- **`/pdf`** — export any framework-generated doc (markdown / HTML / BPMN) to PDF with destination prompt
+- **Agent routing layer** (`agent-routing.yaml`) — per-agent model / endpoint / env / timeout overrides without forking the framework agent files
+- **Class-aware role activation** — role triggers now distinguish isolated-work (spawn sub-agent) from in-flow (adopt persona in-thread) per the role's `Class` field
+
+### Added
+
+- `feat(#377)` `/plan-initiative` — initiative → milestones → tasks with DAG topo-sort + two-pass filing
+- `feat(#299)` `/mutation-test` — language-dispatched mutation testing, milestone cadence, exit-3 graceful degrade
+- `feat(#311)` `/geo-audit` — LLM/agent discoverability audit (renamed from `/generative-engine-audit` in #334)
+- `feat(#296)` `/codify-rule` — review comment → handbook entry, Y/N gated, source-PR footer
+- `feat(#288)` `/feature-diagram` — per-feature Mermaid flowchart
+- `feat(#284)` `/pdf` — destination-prompted PDF export (pandoc / md-to-pdf / wkhtmltopdf / bpmn-to-image dispatch)
+- `feat(#351)` `agent-routing.yaml` — per-agent model / endpoint / env / timeout overrides + SessionStart sync hook + drift guards
+- `feat(#347)` Class-aware role-trigger banner — HYBRID spawn-vs-in-thread per role's `Class` field
+- `feat(#298)` `/handover` scores harnessability across 5 codebase dimensions and offers to file Next Steps as tracker tickets
+- `feat(#293)` Rex domain-aware code review — `handbooks/domain/` Stage 1
+- `feat(#297)` Harness templates by topology — TS NextJS / Python FastAPI / Go data pipeline scaffolds
+- `feat(#321)` Audit-pack + safety-hooks marketplace plugins
+- `feat(#386)` Marketing site rewritten for outcomes-led positioning — new `/how-it-works` page, attribution layer across 156 framework markdown files
+
+### Breaking
+
+- **Security-reviewer agent renamed `Hatim → Hakim`** (#347, PR #360) — consolidates the prior Hatim persona into the canonical Hakim security-review agent. Stock-agent adopters have nothing to do. Adopters with custom prompts / hooks that explicitly referenced `Hatim` must grep and update.
+
+### Fixed
+
+- `fix(#382)` `gh api repos/...` GETs no longer blocked by the ticket-create gate (was over-broad prefix match)
+- `fix(#381)` Code-reviewer agent's approval marker now pin-resolves to the ops fork via SessionStart, not the throwaway clone
+- `fix(#370)` Hook wrappers silent no-op when launched outside an apexyard fork
+- `perf(#372)` `docs/multi-project.md` (70k chars) no longer auto-imported into every session — ~18k tokens reclaimed
+- `fix(#310)` Config resolves from ops-fork root, not the workspace clone
+- `fix(#317)` `/split-portfolio` produces v2 layout with copy-onboarding semantics
+
+### Changed
+
+- `feat(#280)` `jq` is now a hard dependency — `/setup` refuses to proceed without it (was advisory)
+- `feat(#283)` Tracker-aware hooks via `_lib-tracker.sh` dispatcher (`gh` / `linear` / `jira` / `asana` / `custom` / `none`)
+- `feat(#282)` `/update` walks intermediate-release migration chain — safe to skip versions and re-sync
+- `feat(#312)` PR summary narrative-quality rule + Rex advisory check — label-only bullets flagged
+- `feat(#295)` Self-correction guidance standardised across 5 blocking hooks
+
+### Notable behaviour changes
+
+1. **Agent renamed: `Hatim → Hakim`** — see Breaking above.
+2. **`jq` required for `/setup`** — first-run refuses without `jq` on PATH (was silent default-fallback). See AgDR-0038.
+3. **`agent-routing.yaml` SessionStart sync** — overrides applied on every session start. Edit the file; no manual reload needed.
+4. **Class-aware role activation** — custom roles should declare `**Class**: isolated-work-class` or `**Class**: in-flow-class` per AgDR-0050.
+5. **`docs/multi-project.md` no longer auto-loaded** — setup-relevant content still on demand via `Read`.
+
+---
+
 ## [1.3.0] — 2026-05-18
 
 ### Architecture-doc family + audit persistence + split-portfolio v2 + multi-tracker gate
 
-v1.3.0 adds the **architecture-doc family** — eight new skills that read the codebase and produce maintained design artefacts (`/c4`, `/dfd`, `/process`, `/tech-vision`, `/journey`, `/extract-features`, `/agdr`, plus `/threat-model --format=dragon` for OWASP Threat Dragon export). Audit outputs gain a canonical persistence shape (paired JSON + MD per run, dated subdirs) so trend across runs is finally legible. Split-portfolio mode reaches v2 (private repo absorbs `onboarding.yaml` + `workspace/` alongside the registry). Mechanical enforcement deepens: the ticket-first gate now extends past `gh issue create` to Linear / Jira / Asana / custom trackers (#268), Mermaid blocks are parse-validated at write time (#266), and `/threat-model` inlines the DFD as a point-in-time snapshot so historical audits stay self-consistent (#270).
+v1.3.0 added the **architecture-doc family** — read-the-code-and-produce-an-artefact skills (`/c4`, `/dfd`, `/process`, `/tech-vision`, `/journey`, `/extract-features`, `/agdr`, plus `/threat-model --format=dragon`), canonical audit-artefact persistence (paired JSON + MD per run, dated subdirs), split-portfolio v2 (workspace + onboarding moved to private sibling repo), and skill-gated ticket-create across multiple trackers.
 
-**9 new skills, 4 new hooks (28 total), 16 new AgDRs** (AgDR-0014 → AgDR-0028, plus AgDR-0030; 0029 is the parked packaging proposal in PR #267).
+Full release notes: [PR #279](https://github.com/me2resh/apexyard/pull/279). Highlights:
 
-### Highlights
+- 9 new skills, 4 new hooks (28 total at the time), 16 new AgDRs (0014 → 0030, excluding 0029 parked)
+- Audit-artefact persistence (#218, AgDR-0019) — `projects/<name>/audits/<dim>/<ts>.md` + `runs/<ts>.json`
+- Split-portfolio v2 (#242, AgDR-0021) — `onboarding.yaml` + `workspace/` move to private sibling repo
+- Custom templates layer (#244, AgDR-0023) and private custom skills + handbooks (#243, AgDR-0022)
+- Skill-gated ticket-create across `gh` / `linear` / `jira` / `asana` (#268, AgDR-0030)
+- Mermaid lint per emitting skill (`/c4`, `/dfd`, `/tech-vision`) (#266)
 
-- **Architecture-doc family** — 8 new read-the-code-and-produce-an-artefact skills:
-  - `/c4` (#185 earlier; refined here) — System Context (L1) + Container (L2) Mermaid diagrams
-  - `/dfd` (#257) — Data Flow Diagram with trust boundaries + classifications; Mermaid + optional OWASP Threat Dragon v2 JSON. **Single source of truth** that `/threat-model` and `/compliance-check` consume rather than re-deriving (AgDR-0026)
-  - `/process` (#256) — Anchor-scoped, reachability-bounded BPMN 2.0 extraction across 7 process-discovery axes; lint-clean BPMN that opens in Camunda Modeler
-  - `/tech-vision` (#246) — Interactive section-by-section author for the architecture vision template — Scope / Principles / Target-state / Current-vs-Target gap table / multi-quarter Migration / explicit Anti-scope / Review cadence (AgDR-0028)
-  - `/journey` (#179) — Single self-contained HTML user-journey map; clickable modal-per-page graph (AgDR-0016)
-  - `/extract-features` (#249) — Six-axis Feature Inventory for greenfield rewrites
-  - `/agdr` (#181) — Searchable, categorised library across the portfolio (browse / search / show / stats)
-  - `/threat-model --format=dragon` (#255) — OWASP Threat Dragon v2 JSON export (AgDR-0024)
-- **Audit-artefact persistence** (#218, AgDR-0019) — paired JSON + MD per run, `projects/<name>/audits/<dim>/<ts>.md` canonical path, shared lib `_lib-audit-history.sh` with 4 functions. Backfilled across all 10 audit skills (#221). Backward-compatible with `/launch-check`'s pre-existing JSON history (read both, write only to new).
-- **Split-portfolio v2** (#242, AgDR-0021) — moves `onboarding.yaml` AND `workspace/<name>/` to the private sibling repo (was: only registry + projects). Public fork now holds only framework files + your customisations to skills/hooks/rules. Migration path automated via extended `/update`.
-- **Private repo houses company custom skills + cross-org handbooks** (#243, AgDR-0022) — adopters drop proprietary slash commands at `custom-skills/<name>/SKILL.md` + company-confidential coding standards at `custom-handbooks/{architecture,general,language/<lang>}/*.md`. Discovered via SessionStart-hook symlinks (skills) + Rex's dual-glob (handbooks).
-- **Custom templates layer** (#244, AgDR-0023) — path-mirror override semantics. Drop your version at `<private_repo>/custom-templates/<path>` and it wins over the framework default. Every template-consuming skill routes through `portfolio_resolve_template`.
-- **Adopter handbooks consumed by Rex** (#232, AgDR-0020) — `handbooks/{architecture,general,language/<lang>}/*.md` discovered by path-convention; advisory by default, opt in to blocking via `ENFORCEMENT: blocking` marker.
-- **Skill-gated ticket-create hook** (#268, AgDR-0030) — `PreToolUse:Bash` matcher blocks raw `gh issue create` (and Linear / Jira / Asana shapes) unless one of the 7 structured ticket skills is in flight. Tracker-agnostic by construction; adopters extend the matcher list via project-config for their tracker.
-- **`/threat-model` inlines DFD as snapshot at audit time** (#270) — historical threat models stay internally consistent after the live DFD evolves. Refuses if no DFD exists (was: degraded fallback). Inlined output passes through `_lib-mermaid-lint.sh`.
-- **Mermaid lint per emitting skill** (#266) — `_lib-mermaid-lint.sh` + thin per-skill wrappers under `/c4`, `/dfd`, `/tech-vision`. Catches broken Mermaid at write time, not when a human opens the file on GitHub. Graceful Node-missing degrade per the `/process/lint.sh` pattern.
-- **Architecture page on the marketing site** (#271) — `site/architecture.html` shows the canonical 5-layer mental model + optional split-portfolio sibling repo. Diagram recoloured to the site's terminal-native brutalism palette with muted info-graphic hues per layer.
-- **Investigation skill + template** (#245, AgDR-0027) — sustained root-cause work (incident retros, bug archaeology, regression hunts, performance mysteries, competitive analyses). Hypothesis-tree methodology, live-doc workflow. Distinct from `/spike` (forward-looking with budget) and `/bug` (immediate-fix). Closes when every follow-up action lands.
-- **Spike skill + close gate** (#180, AgDR-0017) — hypothesis-driven, time-boxed, throw-away exploration. Spike PRs exempt from AgDR + 80% coverage gates; Rex + security auditor still apply. `/spike-close --promote` files a follow-up `[Feature]`; `/spike-close --discard` writes a memo.
-- **Role-trigger detection** (#206) — mechanical advisory hook injects a "role X should activate for this work" reminder when triggers fire. Plus role-activation visibility markers convention (#205) and Arabic persona names across all 19 roles (#204, AgDR-0018).
-- **Plan-mode usage rule** (#219) — when to enter plan mode (multi-step coordination, unclear path, hard-to-reverse action upcoming, validating a `/fan-out` split). Self-discipline rule with no mechanical backstop (harness-owned).
-- **Architecture templates** (#224) — vision, DFD, and sequence-diagram templates added to `templates/architecture/`.
-- **Pre-release sync mode** (#250) — `/update --from-dev` pulls from `upstream/dev` instead of latest tag. Hidden flag; not a supported general-adopter path.
-
-### Added
-
-- `feat(#181)` `/agdr` — searchable, categorised AgDR library across the portfolio (#186)
-- `feat(#179)` `/journey` — single-file user-journey HTML with modal-per-page (#200)
-- `feat(#180)` `/spike` — hypothesis-driven throw-away ticket type (#202)
-- `feat(#245)` `/investigation` — structured ticket + live-doc for sustained root-cause work (#262)
-- `feat(#246)` `/tech-vision` — interactive section-by-section architecture-vision author (#263)
-- `feat(#249)` `/extract-features` — six-axis Feature Inventory for greenfield rewrites (#252)
-- `feat(#256)` `/process` — anchor-scoped, reachability-bounded BPMN 2.0 extraction (#259)
-- `feat(#257)` `/dfd` — Data Flow Diagram with trust boundaries + classifications (#260)
-- `feat(#255)` `/threat-model --format=dragon` — OWASP Threat Dragon v2 JSON export (#258)
-- `feat(#266)` Mermaid lint per emitting skill (`/c4`, `/dfd`, `/tech-vision`) — shared `_lib-mermaid-lint.sh` + thin per-skill wrappers (#269)
-- `feat(#268)` Skill-gated ticket-create hook — multi-tracker matcher list, bootstrap exemption, env-var escape hatch (#276)
-- `feat(#270)` `/threat-model` inlines DFD as point-in-time snapshot at audit time; refuses if no DFD exists (#273)
-- `feat(#271)` `site/architecture.html` — 5-layer diagram recoloured to site palette (#272)
-- `feat(#218)` Audit-skill artefact persistence + canonical structure — paired JSON+MD, shared `_lib-audit-history.sh` (#222)
-- `feat(#242)` Split-portfolio v2 — `workspace/` + `onboarding.yaml` move to private sibling repo (#248)
-- `feat(#243)` Private repo houses company custom skills + cross-org handbooks (#253)
-- `feat(#244)` Custom templates layer with override semantics (#251)
-- `feat(#232)` Adopter handbooks consumed by Rex during code review (#233)
-- `feat(#250)` `/update --from-dev` — hidden flag for pre-release sync (#254)
-- `feat(#208)` `/setup` auto-enables LSP — language detection + install + env var + plugin (#210)
-- `feat(#206)` Mechanical role-trigger detection — non-blocking reminder injection (#209)
-- `feat(#205)` Role-activation visibility markers convention (#213)
-- `feat(#188)` `/handover` offers clone-first deep-dive prompt (#192)
-- `feat(#182)` `/status --briefing` + `bin/apexyard status` CLI shim (#187)
-- `feat(#177)` `/update` detects deprecated config keys + offers cleanup (#199)
-- `feat(#183)` `/launch-check` trend tracking (#185)
-- `feat(#224)` Architecture vision + DFD + sequence templates (#226)
-
-### Fixed
-
-- `fix(#275)` `require-design-review-for-ui.sh` false-positives on non-UI `.jsx` files — additive `ui_paths_exclude` carve-out (#277)
-- `fix(#227)` Greedy body extractor — no more truncation at embedded quotes (#264)
-- `fix(#229)` Align merge gates + agent + skill on ops-fork marker path (#240)
-- `fix(#207)` `verify-commit-refs` + `validate-pr-create` consult upstream remote (#211)
-- `fix(me2resh/apexyard#194)` Validation hooks read git context from command, not `$PWD` (#198)
-
-### Changed
-
-- `refactor(#204)` Every role + agent gets an Arabic persona name (#212, AgDR-0018)
-- `chore(#221)` Retrofit 7 audit skills onto `_lib-audit-history.sh` (#239)
-- `chore(#223)` Add Data Flow Diagram section to threat-model template (#225)
-- `chore(#215)` `/setup` emits verified LSP plugin-install commands (#216)
-- `chore(#168)` Accept `release/vN.N.N` branches + `release(...)` PR titles (#169)
-- `chore(#170)` Exempt `release/vN.N.N` from `validate-pr-create`'s branch-id check (#171)
-
-### Docs
-
-- `docs(#219)` Plan-mode usage rule — when to enter (#220)
-- `docs(#189)` Document `ENABLE_LSP_TOOL` opt-in + per-language LSP plugin install (#193)
-- `docs(#190)` Annotate LSP-aware skills with opt-in callouts (#191)
-
-### Spikes (closed, memo'd)
-
-- `spike(#241)` `/learn` feasibility — dry-run report (#247)
-- `docs(#197)` Claude tier-routing spike — measurement + recommendation (#201)
-- `docs(#195)` Local-model routing spike — measurement + recommendation (#196)
-- `docs(#178)` LSP integration spike — measurement + recommendation (#184)
-
-### AgDRs (new)
-
-- `AgDR-0014` Launch-check trend tracking
-- `AgDR-0015` Command-context-over-PWD in hooks
-- `AgDR-0016` Journey HTML rendering
-- `AgDR-0017` Spike-skill schema + exemptions
-- `AgDR-0018` Persona-naming convention
-- `AgDR-0019` Audit-artefact persistence (paired JSON+MD, shared lib API)
-- `AgDR-0020` Adopter handbooks for Rex
-- `AgDR-0021` Split-portfolio v2 path resolution
-- `AgDR-0022` Private custom-skills + handbooks name-collision semantics
-- `AgDR-0023` Custom-templates override semantics (path-mirroring)
-- `AgDR-0024` Threat Dragon export
-- `AgDR-0025` Process-skill BPMN + discovery
-- `AgDR-0026` DFD-skill as source of truth (consumed by `/threat-model` + `/compliance-check`)
-- `AgDR-0027` Investigation skill + template
-- `AgDR-0028` Tech-vision skill design
-- `AgDR-0030` Skill-gated ticket-create (mirror of bootstrap-exemption pattern)
-
-### Notable behaviour changes
-
-- **`gh issue create` (and Linear / Jira / Asana equivalents) now require a structured ticket skill in flight.** The `require-skill-for-issue-create.sh` hook blocks raw ticket-create CLIs unless `.claude/session/active-issue-skill` is present. The 7 ticket skills (`/task`, `/feature`, `/bug`, `/spike`, `/migration`, `/investigation`, `/idea`) write the marker on entry and clean it on exit. Operator escape hatch: `APEXYARD_ALLOW_RAW_TICKET_CREATE=1`. See AgDR-0030.
-- **`/threat-model` refuses to run if `dfd.md` is missing** (was: degraded "inline discovery" fallback). The audit artefact now inlines a DFD snapshot at audit time — historical threat models survive subsequent DFD changes. Re-run `/threat-model` to refresh the snapshot.
-- **Split-portfolio adopters: v1 → v2 migration via `/update`.** `/update` detects the v1 layout (only registry + projects/ in the sibling) and offers (default-yes) to move `onboarding.yaml` + `workspace/` to the sibling too. Per-file-class confirmable; idempotent; non-destructive (stages but doesn't commit). See `docs/multi-project.md` § "Migrating from split-portfolio v1 to v2".
-- **Audit outputs now live at `projects/<name>/audits/<dim>/<ts>.md`** (paired with `runs/<ts>.json`). `/launch-check`'s legacy `projects/<name>/launch-check/runs/` path is read-merged, not migrated. Adopters can `mv` the old dir when convenient.
-- **Mermaid blocks now linted at write time** in `/c4`, `/dfd`, `/tech-vision`. First run pulls `@mermaid-js/mermaid-cli` via `npx`; graceful degrade with exit 3 + advisory message when Node is unavailable. Pass `--skip-lint` to bypass.
+---
 
 ## [1.2.0] — 2026-05-04
 
