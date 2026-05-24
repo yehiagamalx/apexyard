@@ -1,4 +1,3 @@
 {
-  "_comment": "Fork-level overrides. Upstream ships defaults at project-config.defaults.json — override specific keys here. See docs/project-config.md for the full schema.",
-  "tracker_repo": "me2resh/apexyard"
+  "_comment": "Fork-level overrides. Upstream ships defaults at project-config.defaults.json — override specific keys here. See docs/project-config.md for the full schema."
 }
