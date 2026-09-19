@@ -104,8 +104,14 @@ see Security Considerations in the technical design).
 - [ ] Definitions have an `order` field editable from the admin UI.
 - [ ] The shortcode renders only `enabled: true` definitions, sorted by
       `order`.
-- [ ] Disabling a chart removes it from the shortcode but the definition
-      (and its REST route) is preserved for later re-enabling.
+- [ ] Disabling a chart withdraws it from **both** the shortcode **and**
+      the public REST endpoint (a disabled chart's ID returns the same
+      404 as a nonexistent one) — the stored definition data itself is
+      preserved in `wp_options` so re-enabling requires no re-entry, but
+      nothing about it stays publicly reachable while disabled. (Corrected
+      from an earlier draft that only withdrew it from the shortcode,
+      leaving the data reachable at a guessable REST URL — flagged in
+      Solution Architect review.)
 
 ---
 
@@ -139,14 +145,21 @@ see Security Considerations in the technical design).
 
 - [ ] Attempting to save a chart definition referencing qid=745 is
       rejected by the validation layer, not merely discouraged in docs.
-- [ ] Attempting to save a chart definition referencing a known free-text
-      qid is rejected the same way.
+- [ ] Attempting to save a chart definition referencing **any** free-text
+      question is rejected the same way — determined dynamically from
+      LimeSurvey's own question-type metadata at validation time, not from
+      a fixed list that a newly-added survey question could bypass. If the
+      qid's type can't be resolved at all, the definition is rejected
+      (fail-closed), never allowed through by default.
 - [ ] The "Import JSON" admin feature runs the same validation — pasting a
       JSON blob that includes a forbidden qid is rejected, never silently
       imported.
 - [ ] The public REST endpoint's only client-controlled input is a
       pre-stored definition ID and `lang`; no request parameter can ever
       resolve to an arbitrary qid or column.
+- [ ] A disabled definition's REST route returns the same response as a
+      nonexistent one — disabling is a real withdrawal of public access,
+      not just a shortcode display preference (see US-2).
 
 ---
 
@@ -183,7 +196,8 @@ see Security Considerations in the technical design).
 | Security | LimeSurvey DB access via a dedicated `SELECT`-only user, on a fixed table allow-list | Read-only user, 5 named tables, mysqli + prepared statements |
 | Security | Dynamic column names validated before use in any SQL string | Strict regex + `information_schema` cross-check |
 | Security | LimeSurvey DB credentials | `wp-config.php` via `putenv()`/`getenv()`, never hardcoded, never in `wp_options` |
-| Security | qid=745 + all free-text fields | Never reachable via any admin path or public endpoint, enforced at the validation layer |
+| Security | qid=745 + all free-text fields | Never reachable via any admin path or public endpoint, enforced at the validation layer — free-text detection is type-derived (fail-closed), not a maintained list |
+| Availability | Public endpoint resilience on a shared, resource-constrained host | Per-IP rate limit ahead of any DB query, plus a short-TTL cache so repeat requests don't re-hit the external DB every time |
 | Resource footprint | Runs alongside other Docker Compose projects on a 3.8GB-RAM shared host | No new heavyweight services; `wp_options`-backed storage, no extra DB server for definitions |
 | Compatibility | Matches the WordPress/PHP versions already running (`wordpress:latest`, PHP 8.2.27) and the Bricks Builder + WPML setup | Shortcode enqueues its own assets from inside the render callback (not via `has_shortcode()` on `post_content`, which Bricks doesn't support) |
 
@@ -233,9 +247,16 @@ the concrete layout, modelled on this portfolio's existing
 
 ### Technical Constraints
 
-- The `wordpress:latest` Docker image lacks the `pdo_mysql` extension —
-  the external LimeSurvey DB connection must use `mysqli`, not PDO or
-  `$wpdb` (which targets WordPress's own database).
+- The `wordpress:latest` Docker image lacks the `pdo_mysql` extension, so
+  PDO is unavailable. `$wpdb` *can* be instantiated against a second,
+  arbitrary host — it isn't hard-limited to WordPress's own database — but
+  it would still just be a thin wrapper over mysqli, adds WordPress-specific
+  error-handling conventions that don't apply to a raw external connection,
+  and mixing "the WordPress database layer" with "a completely separate
+  survey platform's database" invites future maintainers to assume more
+  coupling than exists. The brief also mandates mysqli directly and
+  explicitly. Net: **mysqli directly**, not PDO, not a second `$wpdb`
+  instance — recorded as AgDR-0001 in the plugin's own repo once T1 lands.
 - **This build has no access to the real server or the real LimeSurvey
   database.** All development and regression validation happens against a
   local Docker MySQL fixture engineered to match the documented schema and
@@ -254,6 +275,15 @@ the concrete layout, modelled on this portfolio's existing
       the bind-mount + `git pull` deploy (brief §5) to the real server on
       their own schedule, after independently re-verifying the regression
       numbers against production data.
+
+### Rollback
+
+The existing `v1` (hardcoded per-file) system is untouched by this build
+and keeps running until the maintainer explicitly swaps to `v2` on a live
+page — see the technical design's **Rollback Plan** for the exact
+point-of-no-return and revert steps. Because `v2` is purely additive (a
+separate plugin, separate REST namespace, separate shortcode), the two can
+run side-by-side for comparison before any cutover.
 
 ---
 
