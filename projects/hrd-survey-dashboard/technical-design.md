@@ -59,9 +59,18 @@ ChartDefinition
 ├── enabled: bool
 ├── order: int
 └── Methods:
-    ├── validate(): ValidationResult   (enum membership, integer bounds, forbidden-qid rejection)
+    ├── validate(QuestionTypeResolver): ValidationResult   (enum membership, integer bounds, forbidden-qid + type-allow-list rejection)
     └── to_engine_request(): EngineRequest
 ```
+
+`validate()` takes the `QuestionTypeResolver` port as a parameter rather than
+reaching for the DB connection itself — this keeps the domain method pure
+and unit-testable with a fake resolver (per
+`handbooks/architecture/clean-architecture-layers.md`), even though the
+*behaviour* it implements does require a metadata read (see Data Flow,
+below — this is a correction from an earlier draft that claimed the admin
+write path made no LimeSurvey DB access at all, which stopped being true
+the moment type-derived validation was introduced).
 
 ### Value Objects
 
@@ -69,7 +78,8 @@ ChartDefinition
 |--------------|--------|---------|
 | `Category` | `parent_qid: int`, `title_ar: string`, `title_en: string` | One OR-aggregated category within an `or_aggregate_category_set` definition (brief §4 example: physical/sexual/threats/... under chart 5) |
 | `ColumnRef` | `sid: int`, `gid: int`, `qid: int`, `subcode: string\|null` | A resolved, regex-validated LimeSurvey column name — never constructed from raw request input |
-| `ForbiddenQidList` | `static_qids: int[]` (contains 745, checked first, never removable) | The narrow, hard-coded deny-list for questions excluded by policy rather than by type — see Security Considerations for how free-text exclusion is derived instead of listed |
+| `ForbiddenQidList` | `static_qids: int[]` (contains 745, checked first, never removable) | The narrow, hard-coded deny-list for questions excluded by policy rather than by type — checked *before* the type-allow-list, so it can never be bypassed by a type reclassification |
+| `QuestionTypeResolver` (port) | `resolve(qid): QuestionType\|null` | Abstraction over the "what type is this qid" lookup — implemented against `lime_questions.type` in production, fakeable in unit tests. Returning `null` (lookup failure) is treated as reject, not allow — see Security Considerations |
 | `EngineRequest` | `source_type`, resolved `ColumnRef`s, `lang` | What gets handed to the breakdown-function dispatcher — the engine never sees raw `$_GET` |
 
 ### Domain Events
@@ -93,6 +103,17 @@ over-engineering for what is one WordPress plugin's internals).
                          │   wp-admin (capability-gated)│
                          │  admin/class-admin.php        │
                          │  admin/views/{list,edit}.php  │
+                         └───────────────┬───────────────┘
+                                         │ validate() — via QuestionTypeResolver,
+                                         │ reads lime_questions.type ONLY (metadata,
+                                         │ never respondent data) through the same
+                                         │ read-only mysqli connection below
+                                         v
+                         ┌─────────────────────────────┐
+                         │  QuestionTypeResolver          │
+                         │  (validates qid/subquestions    │
+                         │  against the type allow-list    │
+                         │  before anything is saved)      │
                          └───────────────┬───────────────┘
                                          │ update_option() / get_option()
                                          v
@@ -141,12 +162,24 @@ over-engineering for what is one WordPress plugin's internals).
                             └──────────────────────────────┘
 ```
 
+The `QuestionTypeResolver` box and the Security core box both ultimately
+read the same external LimeSurvey DB, through the same read-only mysqli
+connection and the same 5-table allow-list — they are two *call sites*,
+not two *connections*. The diagram draws them separately because they run
+at different times (validate-on-save vs. execute-on-read), not because
+they're different infrastructure.
+
 ### Data Flow
 
-Admin write path: `admin/class-admin.php` → validation → the repository →
-`wp_options`. No LimeSurvey DB access happens on this path at all — chart
-*definitions* are pure WordPress-side config; only chart *execution* touches
-the external DB.
+Admin write path: `admin/class-admin.php` → `validate()` → **reads
+`lime_questions.type` for the target qid (and, for `multi_checkbox`, for
+every auto-discovered subquestion) via the `QuestionTypeResolver`** → on
+pass, the repository writes to `wp_options`. This is a **metadata-only**
+read — the target qid's declared type, never a respondent's row — but it
+is a real LimeSurvey DB access, correcting an earlier draft of this design
+that claimed the admin write path touched no external DB at all. That
+claim stopped being true the moment type-derived free-text exclusion (see
+Security Considerations) replaced a static list.
 
 Public read path: REST request → the repository loads the definition by ID
 (request supplies **only the ID**) → the engine resolves it to a
@@ -201,7 +234,9 @@ enabled=1
 order=11
 ```
 
-Response on the forbidden-qid case (qid=745 or a known free-text qid):
+Response on the forbidden-qid case (qid=745, or a qid/subquestion whose
+LimeSurvey type resolves outside the allow-list, including an
+unresolvable type):
 
 ```json
 { "success": false, "data": { "message": "This question cannot be used in a chart definition.", "code": "forbidden_qid" } }
@@ -215,7 +250,7 @@ Response on the forbidden-qid case (qid=745 or a known free-text qid):
 | 200 w/ empty dataset | `HRD_STALE_DEFINITION` (custom, in the JSON body, not an HTTP error) | Definition references a qid that no longer exists in LimeSurvey — logged for the admin, never surfaced as a fatal error to a public visitor (PRD Edge Cases) |
 | 403 (`wp_send_json_error`) | `forbidden_qid` | Admin AJAX save/import references qid=745, a type-derived free-text qid, or a qid whose type couldn't be resolved (fail-closed) |
 | 403 (`wp_send_json_error`) | (WP core nonce/capability failure) | AJAX nonce invalid or capability missing |
-| 429 (REST, before any DB query) | `rate_limited` | Per-IP request rate over the endpoint's threshold — see Performance & Availability below |
+| 429 (REST, before any DB query) | `rate_limited` | Per-IP request rate over the endpoint's threshold — see **Performance & Availability**, below |
 
 ---
 
@@ -252,6 +287,7 @@ never writes to, nor extends, this schema.
 | List all definitions ordered (admin UI, shortcode) | Same `get_option()` result, sorted in PHP by `order` |
 | Resolve a dynamic column name | `information_schema.columns` prepared-statement lookup, then a strict regex check (brief §2, unchanged from the existing spec) |
 | Discover subquestions for a `parent_qid` | `SELECT DISTINCT qid, title FROM lime_questions WHERE parent_qid = ?` (brief §2) |
+| Resolve a qid's question type (admin write path, via `QuestionTypeResolver`) | `SELECT type FROM lime_questions WHERE qid = ?` — metadata only, run on every save/import, never on the public read path (the public path only re-executes a definition that already passed this check at save time) |
 
 ---
 
@@ -342,30 +378,68 @@ path once the maintainer deploys `v2`:
       whitelisted `lang` — no request parameter ever resolves to a qid,
       column, or query shape
 - [x] Admin write paths (form save + JSON import) share **one** validation
-      function that hard-rejects qid=745 (static deny-list, first check)
-      **and** any qid whose LimeSurvey question `type` is a free-text type
-      — derived dynamically from `lime_questions.type` at validation time,
-      not a static "known free-text qids" array that a newly-added survey
-      question could slip past. A lookup failure (qid not found, or a type
-      code the resolver doesn't recognise) **rejects** the definition —
-      fail-closed, never fail-open
+      function that hard-rejects qid=745 (static deny-list, first check),
+      **then** checks every qid the definition would touch — the top-level
+      `qid`/`parent_qid`/`standalone_qids`, **and every subquestion
+      auto-discovered for a `multi_checkbox` definition** — against a
+      fixed **allow-list** of LimeSurvey question types:
+      `HRD_ALLOWED_QUESTION_TYPES = ['L', 'M', 'Y']` (list/radio,
+      multiple-choice-with-subquestions, yes/no — exactly the types the
+      brief's own 10 charts use). This is an allow-list, not a deny-list,
+      specifically because a deny-list of "known free-text types" fails
+      open on anything new or unanticipated; an allow-list fails closed by
+      construction. Any qid/subquestion whose type is absent from the
+      allow-list is rejected — this includes both genuine free-text types
+      (long/short/huge text) **and** the `O`/`P` comment-enabled question
+      types, whose per-item "comment" sub-columns are free text even
+      though the parent question itself is a legitimate categorical type.
+      The brief's own `...other` checkbox-selected flag (chart 4) is a
+      `Y`/`N` indicator of whether "other" was chosen, not the free text
+      itself, and is counted the same as any other subquestion — it is
+      **not** a carve-out from the allow-list, it simply already satisfies
+      it. A lookup failure (qid not found, or a type code the resolver
+      doesn't recognise) **rejects** the definition — fail-closed, never
+      fail-open. Expanding the allow-list to a new type is a deliberate
+      code change with its own review, not a config toggle.
 - [x] `enabled: false` withdraws a chart from the **public REST endpoint
       as well as** the shortcode — the endpoint returns the same 404 for
-      "ID not found" and "ID found but disabled", so the maintainer's
-      disable toggle is a real emergency control, not merely a display
-      preference. (This closes a gap flagged in Solution Architect review:
-      an earlier draft only checked existence, not the `enabled` flag.)
-- [x] The public endpoint is rate-limited per IP **before** any DB query
-      runs, and successful responses are cached (a short-TTL WordPress
-      transient per `(id, lang)`), so an unauthenticated caller can't drive
-      unbounded query volume against the external DB on a shared,
-      resource-constrained host
+      "ID not found" and "ID found but disabled". The definition-level
+      cache (see Performance & Availability, below) is invalidated
+      **synchronously, as part of the same write**, for every save,
+      delete, and enable/disable toggle — so a disable takes effect
+      immediately, not after the cache's TTL expires. Without that
+      invalidation rule, the cache and the disable control would
+      contradict each other (a gap flagged in Solution Architect review);
+      with it, both "visible immediately after enabling" (PRD US-1) and
+      "gone immediately after disabling" (PRD US-2/US-4) hold at once.
 - [x] `MYSQLI_REPORT_STRICT` exceptions are caught at the plugin boundary
       and never allowed to propagate a raw DB error (which could include
       schema/query detail) into the public REST response — logged
       internally, a generic error returned externally
 - [x] No PII in logs — the "stale definition" logging path (Edge Cases)
       logs only the qid and definition ID, never response content
+
+---
+
+## Performance & Availability
+
+The public endpoint is unauthenticated by design (PRD US-3/brief §3.5) and
+runs on a 3.8GB host shared with other Docker Compose projects — it needs a
+concrete ceiling, not just a stated intention to have one. These are
+starting defaults for a low-traffic public transparency dashboard, not
+numbers derived from load testing (none is possible without the real
+server); the maintainer can retune them post-deploy.
+
+| Control | Default | Rationale |
+|---------|---------|-----------|
+| Per-IP rate limit | 30 requests/minute per IP, per chart ID | Generous enough for a real visitor loading all ~10 charts on one page load more than once; tight enough that a scripted loop can't drive unbounded query volume |
+| Cache TTL | 5 minutes, WordPress transient keyed `hrd_chart_{id}_{lang}` | Short enough that a legitimate edit (US-1) is never stale for long even if invalidation somehow missed a path; long enough to absorb repeat requests without re-querying the external DB every time |
+| Cache invalidation | Synchronous, on every save/delete/enable-toggle/import — not just TTL expiry | The load-bearing rule that keeps the cache from contradicting the `enabled` disable control (see Security Considerations) |
+| Rate-limit enforcement point | Before the cache lookup and before any DB connection is opened | A rate-limited request costs nothing beyond reading a WordPress transient/option for the counter itself |
+
+Rate-limit and cache state both live in WordPress transients (no new
+service, no new dependency — consistent with the `wp_options`-only storage
+decision above).
 
 ---
 

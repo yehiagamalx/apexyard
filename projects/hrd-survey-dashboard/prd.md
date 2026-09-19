@@ -46,10 +46,11 @@ see Security Considerations in the technical design).
 5. **Absolute, code-enforced exclusion** of qid=745 ("do you want
    protection?") and every free-text field from all charts and endpoints —
    enforced in the validation layer itself, not left to reviewer discipline.
-6. Replace manual `docker cp` deploys with a Git-based workflow (bind mount
-   + `git pull` + a deploy script) — scoped to producing the *artifacts* for
-   this; actually wiring them into the live server is explicitly the
-   maintainer's own step, not part of this build (see Non-Goals).
+6. Replace manual `docker cp` deploys with a Git-based workflow (a bind
+   mount, `git pull`, and a deploy script) — scoped to producing the
+   *artifacts* for this; actually wiring them into the live server is
+   explicitly the maintainer's own step, not part of this build (see
+   Non-Goals).
 
 ### Non-Goals (Out of Scope)
 
@@ -81,6 +82,7 @@ see Security Considerations in the technical design).
 ## User Stories
 
 ### US-1: Add a chart without touching code
+
 > As the site maintainer, I want to add a new chart by filling in a form in
 > wp-admin, so that I never have to write PHP or redeploy for a new chart.
 
@@ -96,6 +98,7 @@ see Security Considerations in the technical design).
 ---
 
 ### US-2: Reorder and toggle existing charts
+
 > As the site maintainer, I want to reorder and enable/disable charts, so
 > that I control what visitors see without deleting definitions.
 
@@ -116,6 +119,7 @@ see Security Considerations in the technical design).
 ---
 
 ### US-3: Visitor sees accurate, matching charts
+
 > As a site visitor, I want the published charts to show the same numbers
 > the organisation has already verified, so that the dashboard is
 > trustworthy.
@@ -136,6 +140,7 @@ see Security Considerations in the technical design).
 ---
 
 ### US-4: Forbidden data can never be exposed, even by mistake
+
 > As the organisation responsible for this data, I want it to be
 > structurally impossible to define a chart on the protection question or
 > any free-text field, so that a config mistake can't leak sensitive
