@@ -45,6 +45,23 @@ projects:
       - plugin
     ticket_prefix: GH
 
+  - name: hrd-survey-dashboard
+    repo: yehiagamalx/hrd-survey-dashboard
+    workspace: workspace/hrd-survey-dashboard
+    docs: projects/hrd-survey-dashboard
+    status: active
+    tier: P0
+    roles:
+      - tech-lead
+      - backend-engineer
+      - security-reviewer
+    tags:
+      - wordpress
+      - plugin
+      - security-sensitive
+      - limesurvey
+    ticket_prefix: GH
+
 defaults:
   status: active
   tier: P1
